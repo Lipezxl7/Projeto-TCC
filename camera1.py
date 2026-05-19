@@ -103,6 +103,11 @@ def detectar_dispositivo():
         vram = torch.cuda.get_device_properties(0).total_memory / 1e9
         log.info(f"GPU detectada: {nome} ({vram:.1f} GB VRAM)")
         return "cuda"
+    elif torch.xpu.is_available():
+        nome = torch.xpu.get_device_name(0)
+        vram = torch.xpu.get_device_properties(0).total_memory / 1e9
+        log.info(f"GPU detectada: {nome} ({vram:.1f} GB VRAM)")
+        return "xpu"
     log.warning("GPU não encontrada — rodando em CPU (mais lento)")
     return "cpu"
 
@@ -684,7 +689,9 @@ def main():
                     f"ativos:{len(rastreios)}  FPS:{fps_medio:.1f}  [{DEVICE.upper()}]  q=sair r=reset",
                     (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (150, 150, 150), 1)
 
-        cv2.imshow("Contador TCC", frame)
+        # Tamanho da janela.
+        frame_exibir = cv2.resize(frame, (960, 540))
+        cv2.imshow("Contador TCC", frame_exibir)
         tecla = cv2.waitKey(1) & 0xFF
         if tecla == ord("q"):
             break
