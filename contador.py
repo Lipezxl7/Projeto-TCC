@@ -5,6 +5,8 @@ import os
 import sys
 import tempfile
 
+# TODO: Refatorar o detect device, essa merda esta muito redundante.
+
 # DETECÇÃO DE HARDWARE
 def detect_device(preferred: str | None = None) -> tuple[str, str]:
     """
