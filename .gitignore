@@ -1,6 +1,4 @@
 *.pt
-debug/
-*.log
-galeria_data.txt
 .vscode/
 venv/
+yolo*/
