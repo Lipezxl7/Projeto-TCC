@@ -4,80 +4,48 @@ import argparse
 import os
 import sys
 import tempfile
+from pathlib import Path
+import torch
+import openvino as ov
+from ultralytics import YOLO
 
-# TODO: Refatorar o detect device, essa merda esta muito redundante.
+# Auto selecao baseada no que previsivelmente e o mais top tlgd.
+def auto_device_selection(intel_available_devices: list) -> tuple[str, str]:
+    # Sequencia CUDA -> MPS -> Intel GPU -> Intel CPU -> CPU
 
-# DETECÇÃO DE HARDWARE
+    if torch.cuda.is_available():
+        return "cuda", f"NVIDIA GPU – {torch.cuda.get_device_name(0)} - Automatico"
+    elif torch.backends.mps.is_built() and torch.backends.mps.is_available():
+        return "mps", "Apple Silicon (MPS) - Automatico"
+    elif "GPU" in intel_available_devices:
+        return "openvino:GPU", "Intel GPU (OpenVINO) - Automatico"
+    elif "CPU" in intel_available_devices:
+        return "openvino:CPU", "Intel CPU (OpenVINO) - Automatico"
+
+    return "cpu", "CPU"
+
+# Deteccao de dispotivo insano feito pelo nego malandro.
 def detect_device(preferred: str | None = None) -> tuple[str, str]:
-    """
-    Retorna (device_string, nome do dispositivo).
-    Ordem de preferência automática: CUDA → MPS → OpenVINO → CPU.
-    """
-    try:
-        import torch
-    except ImportError:
-        return "cpu", "CPU (torch não instalado)"
+    intel_available_devices = ov.Core().available_devices
 
     if preferred:
         p = preferred.lower()
 
-        if p in ("intel", "openvino"):
-            return _resolve_openvino(sub=None)
-        if p in ("intel:gpu", "openvino:gpu"):
-            return _resolve_openvino(sub="GPU")
-        if p in ("intel:cpu", "openvino:cpu"):
-            return _resolve_openvino(sub="CPU")
-
-        if p == "cuda":
-            if torch.cuda.is_available():
+        match p:
+            case "cuda" if torch.cuda.is_available():
                 return "cuda", f"NVIDIA GPU – {torch.cuda.get_device_name(0)}"
-            print("Aviso: CUDA não disponível. Usando CPU.")
-            return "cpu", "CPU"
-        if p == "mps":
-            if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            case "mps" if torch.backends.mps.is_built() and torch.backends.mps.is_available():
                 return "mps", "Apple Silicon (MPS)"
-            print("Aviso: MPS não disponível. Usando CPU.")
-            return "cpu", "CPU"
-        if p.startswith("cuda:") or p.isdigit():
-            idx = int(p.split(":")[-1])
-            if torch.cuda.is_available() and idx < torch.cuda.device_count():
-                return f"cuda:{idx}", f"NVIDIA GPU {idx} – {torch.cuda.get_device_name(idx)}"
-            print(f"Aviso: GPU {idx} não disponível. Usando CPU.")
-            return "cpu", "CPU"
-        return "cpu", "CPU"
+            case "intel:gpu" if "GPU" in intel_available_devices:
+                return "openvino:GPU", "Intel GPU (OpenVINO)"
+            case "intel:cpu" if "CPU" in intel_available_devices:
+                return "openvino:CPU", "Intel CPU (OpenVINO)"
+            case "cpu":
+                return "cpu", "CPU"
+            case _:
+                return auto_device_selection(intel_available_devices)
 
-    # Auto-detecção
-    if torch.cuda.is_available():
-        return "cuda", f"NVIDIA GPU – {torch.cuda.get_device_name(0)}"
-    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-        return "mps", "Apple Silicon (MPS)"
-    return "cpu", "CPU"
-
-
-def _resolve_openvino(sub: str | None) -> tuple[str, str]:
-    # Verifica no OpenVINO qual dispositivo Intel usar com prioridade a gpu logico.
-    try:
-        import openvino as ov
-    except ImportError:
-        print("Aviso: OpenVINO não instalado →  pip install openvino")
-        print("       Usando CPU padrão.")
-        return "cpu", "CPU"
-
-    available = ov.Core().available_devices  # ex: ["CPU", "GPU", "NPU"]
-
-    if sub == "GPU":
-        if "GPU" in available:
-            return "openvino:GPU", "Intel GPU (OpenVINO)"
-        print("Aviso: Intel GPU não encontrada. Usando Intel CPU via OpenVINO.")
-        return "openvino:CPU", "Intel CPU (OpenVINO)"
-    if sub == "CPU":
-        return "openvino:CPU", "Intel CPU (OpenVINO)"
-
-    # Auto: GPU > CPU
-    if "GPU" in available:
-        return "openvino:GPU", "Intel GPU (OpenVINO) — auto"
-    return "openvino:CPU", "Intel CPU (OpenVINO) — auto"
-
+    return auto_device_selection(intel_available_devices)
 
 def load_model(device: str, model_name: str = "yolo26n.pt"):
     """
@@ -90,11 +58,6 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
       - OpenVINO: device_para_track = None  (nao passa ao track, evita erro CUDA)
       - Demais:   device_para_track = device string normal
     """
-    try:
-        from ultralytics import YOLO
-    except ImportError:
-        print("Erro: instale o ultralytics ->  pip install ultralytics")
-        sys.exit(1)
 
     if device.startswith("openvino:"):
         ov_target = device.split(":", 1)[1]   # "CPU" ou "GPU"
@@ -111,9 +74,6 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
         # tentar validar o device string via select_device(), que interpretaria
         # "GPU" como um device CUDA invalido e lancaria 'Invalid CUDA device'.
         try:
-            import openvino as ov
-            from pathlib import Path
-
             core     = ov.Core()
             xml_file = next(Path(ov_path).glob("*.xml"))
             compiled = core.compile_model(str(xml_file), ov_target)
@@ -354,7 +314,7 @@ def main():
         metavar="N",
         help="Atualiza aparência 1× a cada N frames. Padrão: 1")
     parser.add_argument("--img-size", type=int, default=640,
-        choices=[320, 480, 640, 720],
+        choices=[320, 480, 640, 768],
         metavar="N",
         help="Resolução de entrada do YOLO (320/480/640/720). Padrão: 640")
     parser.add_argument("--model", type=str, default="yolo26n.pt",
@@ -364,7 +324,7 @@ def main():
              "Aceita também caminho para um modelo customizado (.pt).")
     parser.add_argument("--device", type=str, default=None,
         metavar="DEVICE",
-        help="Hardware: 'cuda' (NVIDIA), 'mps' (Apple Silicon), 'cpu'. "
+        help="Hardware: 'cuda' (NVIDIA), 'mps' (Apple Silicon), 'intel:gpu' (Intel GPU), 'intel:cpu' (Intel CPU), 'cpu'. "
              "Padrão: detecta automaticamente.")
     parser.add_argument("--no-window", action="store_true",
         help="Roda sem abrir janela (modo headless).")
