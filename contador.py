@@ -170,7 +170,7 @@ def draw_overlay(frame: np.ndarray, unique_count: int) -> None:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
 #  CONTAGEM PRINCIPAL
-def count_unique_people(video_path: str = "video.mp4", tolerance: float = 0.01,
+def count_unique_people(video_path: str = "video.mp4", tolerance: float = 0.005,
                         sample_rate: int = 1, img_size: int = 640,
                         show_window: bool = True, device: str = "cpu",
                         model_name: str = "yolo26n.pt") -> int:
@@ -228,7 +228,7 @@ fuse_score: true
             tracker=tracker_path,
             classes=[0],
             conf=0.40,
-            iou=0.50,
+            iou=0.60,
             imgsz=img_size,
             verbose=False,
         )
@@ -303,16 +303,16 @@ def main():
     )
     parser.add_argument("video",
         help="Caminho para o arquivo de vídeo")
-    parser.add_argument("--tolerance", type=float, default=0.01,
+    parser.add_argument("--tolerance", type=float, default=0.005,
         metavar="N",
-        help="Limiar de similaridade de aparência (0–0.35). Padrão: 0.01")
+        help="Limiar de similaridade de aparência (0–0.35). Padrão: 0.005")
     parser.add_argument("--sample-rate", type=int, default=1,
         metavar="N",
         help="Atualiza aparência 1× a cada N frames. Padrão: 1")
     parser.add_argument("--img-size", type=int, default=640,
-        choices=[320, 480, 640, 768],
+        choices=[320, 480, 640, 768, 864, 960, 1050, 1200, 1392, 1536],
         metavar="N",
-        help="Resolução de entrada do YOLO (320/480/640/720). Padrão: 640")
+        help="Resolução de entrada do YOLO (320/480/640/768/864/960/1050/1200/1392/1536). Padrão: 640")
     parser.add_argument("--model", type=str, default="yolo26n.pt",
         metavar="MODEL",
         help="Modelo YOLO a usar. Exemplos: yolo26n.pt (padrão, mais rápido), "
