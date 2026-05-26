@@ -66,7 +66,7 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
 
         if not os.path.isdir(ov_path):
             print("  Exportando modelo para OpenVINO (so na 1a execucao)...")
-            YOLO(model_name).export(format="openvino", half=False)
+            YOLO(model_name).export(format="openvino", half=False, dynamic=True)
             print("  Exportacao concluida.\n")
 
         # Compila o modelo diretamente via OpenVINO Core apontando para o
@@ -310,9 +310,9 @@ def main():
         metavar="N",
         help="Atualiza aparência 1× a cada N frames. Padrão: 1")
     parser.add_argument("--img-size", type=int, default=640,
-        choices=[320, 480, 640, 768, 864, 960, 1050, 1200, 1392, 1536],
+        choices=[320, 480, 640, 768, 1024, 1280, 1536, 2048],
         metavar="N",
-        help="Resolução de entrada do YOLO (320/480/640/768/864/960/1050/1200/1392/1536). Padrão: 640")
+        help="Resolução de entrada do YOLO (320/480/640/768/1024/1280/1536/2048). Padrão: 640")
     parser.add_argument("--model", type=str, default="yolo26n.pt",
         metavar="MODEL",
         help="Modelo YOLO a usar. Exemplos: yolo26n.pt (padrão, mais rápido), "
