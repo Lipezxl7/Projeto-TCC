@@ -169,13 +169,6 @@ def draw_overlay(frame: np.ndarray, unique_count: int) -> None:
     cv2.putText(frame, text, (pad + 2, th + pad),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
-def resize_for_display(frame: np.ndarray, max_width: int = 1024) -> np.ndarray:
-    h, w = frame.shape[:2]
-    if w <= max_width:
-        return frame
-    scale  = max_width / w
-    return cv2.resize(frame, (max_width, int(h * scale)))
-
 #  CONTAGEM PRINCIPAL
 def count_unique_people(video_path: str = "video.mp4", tolerance: float = 0.01,
                         sample_rate: int = 1, img_size: int = 640,
@@ -213,6 +206,9 @@ fuse_score: true
 
     window_name = "Person Counter  |  pressione Q para sair"
     frame_num   = 0
+    
+    # Pra a janela poder ter o tamanho alterado $$$
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -285,7 +281,7 @@ fuse_score: true
         # Painel de contagem
         if show_window:
             draw_overlay(frame, len(unique_people))
-            cv2.imshow(window_name, resize_for_display(frame))
+            cv2.imshow(window_name, frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("\n  Interrompido pelo usuário.")
                 break
