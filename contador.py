@@ -170,27 +170,39 @@ def draw_overlay(frame: np.ndarray, unique_count: int) -> None:
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
 #  CONTAGEM PRINCIPAL
-def count_unique_people(video_path: str = "video.mp4", tolerance: float = 0.005,
+def count_unique_people(video_path: str | int | None = None,
+                        tolerance: float = 0.005,
                         sample_rate: int = 1, img_size: int = 640,
                         show_window: bool = True, device: str = "cpu",
-                        model_name: str = "yolo26n.pt") -> int:
+                        model_name: str = "yolo26n.pt",
+                        webcam: bool = False) -> int:
 
     model, resolved_device = load_model(device, model_name)
 
-    cap = cv2.VideoCapture(video_path)
+    if webcam:
+        cam_idx = int(video_path) if isinstance(video_path, int) else 0
+        cap = cv2.VideoCapture(cam_idx)
+        source_label = f"Webcam {cam_idx}"
+    else:
+        cap = cv2.VideoCapture(video_path)
+        source_label = str(video_path)
+
     if not cap.isOpened():
+        if webcam:
+            raise RuntimeError(f"Não foi possível abrir a webcam {cam_idx}")
         raise FileNotFoundError(f"Não foi possível abrir: {video_path}")
 
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps          = cap.get(cv2.CAP_PROP_FPS) or 25
 
-    # ByteTrack com buffer permanente (nunca expira durante o vídeo)
+    track_buffer = total_frames if total_frames > 0 and not webcam else 900
+
     tracker_cfg = f"""\
 tracker_type: bytetrack
 track_high_thresh: 0.50
 track_low_thresh: 0.10
 new_track_thresh: 0.60
-track_buffer: {total_frames}
+track_buffer: {track_buffer}
 match_thresh: 0.80
 fuse_score: true
 """
@@ -213,16 +225,19 @@ fuse_score: true
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret:
+            if webcam:
+                print("\n  Perda de conexao com a webcam.")
+                break
             break
 
-        pct = frame_num / max(total_frames, 1) * 100
-        print(f"\r  {pct:5.1f}%  |  pessoas únicas: {len(unique_people)}",
-              end="", flush=True)
+        if webcam:
+            print(f"\r  Webcam ativa  |  frame: {frame_num}  |  pessoas unicas: {len(unique_people)}",
+                  end="", flush=True)
+        else:
+            pct = frame_num / max(total_frames, 1) * 100
+            print(f"\r  {pct:5.1f}%  |  pessoas únicas: {len(unique_people)}",
+                  end="", flush=True)
 
-        # Detecção + rastreamento (todo frame para display fluido)
-        # resolved_device e None para OpenVINO (device ja compilado no modelo).
-        # Para os demais, passa normalmente para evitar que o ultralytics
-        # selecione CUDA quando nao e o que queremos.
         _track_kwargs = dict(
             persist=True,
             tracker=tracker_path,
@@ -244,7 +259,6 @@ fuse_score: true
             for box, tid in zip(boxes, track_ids):
                 x1, y1, x2, y2 = box
 
-                # Atualiza aparência a cada N frames
                 if frame_num % sample_rate == 0:
                     crop = frame[max(0, y1):y2, max(0, x1):x2]
                     feat = extract_appearance(crop)
@@ -254,7 +268,6 @@ fuse_score: true
                             if tid in track_features else feat
                         )
 
-                # Associa track a pessoa única (na primeira aparição do track)
                 if tid not in track_to_person and tid in track_features:
                     feat = track_features[tid]
                     matched_idx = next(
@@ -271,14 +284,12 @@ fuse_score: true
                         unique_people.append(feat)
                         track_to_person[tid] = len(unique_people)
 
-                # Desenho
                 if show_window:
                     person_id = track_to_person.get(tid, 0)
                     draw_box(frame, x1, y1, x2, y2,
                              person_id=person_id,
                              confirmed=(person_id > 0))
 
-        # Painel de contagem
         if show_window:
             draw_overlay(frame, len(unique_people))
             cv2.imshow(window_name, frame)
@@ -301,8 +312,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Contador de pessoas insano",
     )
-    parser.add_argument("video",
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("video", nargs="?",
         help="Caminho para o arquivo de vídeo")
+    source.add_argument("--webcam", type=int, nargs="?", const=0,
+        metavar="IDX",
+        help="Usa webcam como fonte. IDX é o índice da câmera (padrão: 0).")
     parser.add_argument("--tolerance", type=float, default=0.005,
         metavar="N",
         help="Limiar de similaridade de aparência (0–0.35). Padrão: 0.005")
@@ -326,13 +341,17 @@ def main():
         help="Roda sem abrir janela (modo headless).")
     args = parser.parse_args()
 
-    if not os.path.isfile(args.video):
-        print(f"Erro: arquivo não encontrado → {args.video}")
-        sys.exit(1)
+    if args.webcam is not None:
+        source_desc = f"📹  Webcam {args.webcam}"
+    else:
+        if not os.path.isfile(args.video):
+            print(f"Erro: arquivo não encontrado → {args.video}")
+            sys.exit(1)
+        source_desc = f"🎬  {args.video}"
 
     device, device_desc = detect_device(args.device)
 
-    print(f"\n🎬  {args.video}")
+    print(f"\n{source_desc}")
     print(f"    modelo:       {args.model}")
     print(f"    hardware:     {device_desc}")
     print(f"    tolerância:   {args.tolerance}  "
@@ -347,6 +366,7 @@ def main():
         show_window=not args.no_window,
         device=device,
         model_name=args.model,
+        webcam=args.webcam is not None,
     )
 
     print(f"\n  Pessoas únicas encontradas: {count}\n")
