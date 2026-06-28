@@ -4,6 +4,9 @@ import argparse
 import os
 import sys
 import tempfile
+import threading
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 import torch
 import openvino as ov
@@ -169,155 +172,207 @@ def draw_overlay(frame: np.ndarray, unique_count: int) -> None:
     cv2.putText(frame, text, (pad + 2, th + pad),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
-#  CONTAGEM PRINCIPAL
-def count_unique_people(video_path: str | int | None = None,
-                        tolerance: float = 0.005,
-                        sample_rate: int = 1, img_size: int = 640,
-                        show_window: bool = True, device: str = "cpu",
-                        model_name: str = "yolo26n.pt",
-                        webcam: bool = False) -> int:
+# ──────────────────────────────────────────────
+#  MULTISOURCE – estado por fonte e registro compartilhado
+# ──────────────────────────────────────────────
 
-    model, resolved_device = load_model(device, model_name)
+@dataclass
+class _Shared:
+    unique_people: list = field(default_factory=list)
+    people_lock: threading.Lock = field(default_factory=threading.Lock)
+    stop_event: threading.Event = field(default_factory=threading.Event)
 
-    if webcam:
-        cam_idx = int(video_path) if isinstance(video_path, int) else 0
-        cap = cv2.VideoCapture(cam_idx)
-        source_label = f"Webcam {cam_idx}"
-    else:
-        cap = cv2.VideoCapture(video_path)
-        source_label = str(video_path)
 
-    if not cap.isOpened():
-        if webcam:
-            raise RuntimeError(f"Não foi possível abrir a webcam {cam_idx}")
-        raise FileNotFoundError(f"Não foi possível abrir: {video_path}")
+@dataclass
+class _Source:
+    idx: int
+    label: str
+    window: str
+    is_webcam: bool
+    cap: cv2.VideoCapture
+    model: YOLO
+    resolved_device: str | None
+    tracker_path: str
+    total_frames: int
+    track_features: dict = field(default_factory=dict)
+    track_to_person: dict = field(default_factory=dict)
+    frame_num: int = 0
+    done: bool = False
+    latest_frame: object = None
 
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    fps          = cap.get(cv2.CAP_PROP_FPS) or 25
 
-    track_buffer = total_frames if total_frames > 0 and not webcam else 900
+def _worker(src: _Source, shared: _Shared, tolerance: float,
+            sample_rate: int, img_size: int, show_window: bool) -> None:
+    track_kwargs = dict(
+        persist=True, tracker=src.tracker_path, classes=[0],
+        conf=0.40, iou=0.60, imgsz=img_size, verbose=False,
+    )
+    if src.resolved_device is not None:
+        track_kwargs["device"] = src.resolved_device
 
-    tracker_cfg = f"""\
-tracker_type: bytetrack
-track_high_thresh: 0.50
-track_low_thresh: 0.10
-new_track_thresh: 0.60
-track_buffer: {track_buffer}
-match_thresh: 0.80
-fuse_score: true
-"""
-    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
-    tmp.write(tracker_cfg)
-    tmp.close()
-    tracker_path = tmp.name
-
-    # Estado do rastreamento
-    track_features:  dict[int, np.ndarray] = {}  # tid → vetor de aparência
-    track_to_person: dict[int, int]        = {}  # tid → nº da pessoa única
-    unique_people:   list[np.ndarray]      = []  # representantes canônicos
-
-    window_name = "Person Counter  |  pressione Q para sair"
-    frame_num   = 0
-    
-    # Pra a janela poder ter o tamanho alterado $$$
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-
-    while cap.isOpened():
-        ret, frame = cap.read()
+    while not shared.stop_event.is_set() and not src.done:
+        ret, frame = src.cap.read()
         if not ret:
-            if webcam:
-                print("\n  Perda de conexao com a webcam.")
-                break
+            if src.is_webcam:
+                print(f"\n  Perda de conexao com {src.label}.")
+            src.done = True
             break
 
-        if webcam:
-            print(f"\r  Webcam ativa  |  frame: {frame_num}  |  pessoas unicas: {len(unique_people)}",
-                  end="", flush=True)
-        else:
-            pct = frame_num / max(total_frames, 1) * 100
-            print(f"\r  {pct:5.1f}%  |  pessoas únicas: {len(unique_people)}",
-                  end="", flush=True)
-
-        _track_kwargs = dict(
-            persist=True,
-            tracker=tracker_path,
-            classes=[0],
-            conf=0.40,
-            iou=0.60,
-            imgsz=img_size,
-            verbose=False,
-        )
-        if resolved_device is not None:
-            _track_kwargs["device"] = resolved_device
-
-        results = model.track(frame, **_track_kwargs)
+        results = src.model.track(frame, **track_kwargs)
 
         if results[0].boxes.id is not None:
-            boxes     = results[0].boxes.xyxy.cpu().numpy().astype(int)
+            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
             track_ids = results[0].boxes.id.int().cpu().numpy()
 
             for box, tid in zip(boxes, track_ids):
                 x1, y1, x2, y2 = box
 
-                if frame_num % sample_rate == 0:
+                if src.frame_num % sample_rate == 0:
                     crop = frame[max(0, y1):y2, max(0, x1):x2]
                     feat = extract_appearance(crop)
                     if feat is not None:
-                        track_features[tid] = (
-                            0.7 * track_features[tid] + 0.3 * feat
-                            if tid in track_features else feat
+                        src.track_features[tid] = (
+                            0.7 * src.track_features[tid] + 0.3 * feat
+                            if tid in src.track_features else feat
                         )
 
-                if tid not in track_to_person and tid in track_features:
-                    feat = track_features[tid]
-                    matched_idx = next(
-                        (i for i, rep in enumerate(unique_people)
-                         if cosine_dist(feat, rep) <= tolerance),
-                        None
-                    )
-                    if matched_idx is not None:
-                        unique_people[matched_idx] = (
-                            0.6 * unique_people[matched_idx] + 0.4 * feat
+                if tid not in src.track_to_person and tid in src.track_features:
+                    feat = src.track_features[tid]
+                    with shared.people_lock:
+                        matched_idx = next(
+                            (i for i, rep in enumerate(shared.unique_people)
+                             if cosine_dist(feat, rep) <= tolerance),
+                            None,
                         )
-                        track_to_person[tid] = matched_idx + 1
-                    else:
-                        unique_people.append(feat)
-                        track_to_person[tid] = len(unique_people)
+                        if matched_idx is not None:
+                            shared.unique_people[matched_idx] = (
+                                0.6 * shared.unique_people[matched_idx] + 0.4 * feat
+                            )
+                            src.track_to_person[tid] = matched_idx + 1
+                        else:
+                            shared.unique_people.append(feat)
+                            src.track_to_person[tid] = len(shared.unique_people)
 
                 if show_window:
-                    person_id = track_to_person.get(tid, 0)
+                    person_id = src.track_to_person.get(tid, 0)
                     draw_box(frame, x1, y1, x2, y2,
                              person_id=person_id,
                              confirmed=(person_id > 0))
 
         if show_window:
-            draw_overlay(frame, len(unique_people))
-            cv2.imshow(window_name, frame)
+            draw_overlay(frame, len(shared.unique_people))
+            src.latest_frame = frame
+
+        src.frame_num += 1
+
+
+def _print_status(states: list[_Source], shared: _Shared) -> None:
+    parts = []
+    for s in states:
+        if s.is_webcam:
+            parts.append(f"{s.label}: frame {s.frame_num}")
+        else:
+            pct = s.frame_num / max(s.total_frames, 1) * 100
+            parts.append(f"{s.label}: {pct:4.1f}%")
+    line = "  |  ".join(parts) + f"  |  pessoas únicas: {len(shared.unique_people)}"
+    print("\r" + line.ljust(90), end="", flush=True)
+
+
+def count_unique_people(
+        sources: list[tuple[bool, int | str, str]],
+        tolerance: float = 0.005,
+        sample_rate: int = 1, img_size: int = 640,
+        show_window: bool = True, device: str = "cpu",
+        model_name: str = "yolo26n.pt") -> int:
+
+    shared = _Shared()
+    states: list[_Source] = []
+
+    for i, (is_w, value, label) in enumerate(sources):
+        model, resolved_device = load_model(device, model_name)
+
+        cap = cv2.VideoCapture(int(value)) if is_w else cv2.VideoCapture(value)
+        if not cap.isOpened():
+            if is_w:
+                raise RuntimeError(f"Não foi possível abrir a webcam {value}")
+            raise FileNotFoundError(f"Não foi possível abrir: {value}")
+
+        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        buf = total if total > 0 and not is_w else 900
+
+        cfg = (f"tracker_type: bytetrack\ntrack_high_thresh: 0.50\n"
+               f"track_low_thresh: 0.10\nnew_track_thresh: 0.60\n"
+               f"track_buffer: {buf}\nmatch_thresh: 0.80\nfuse_score: true\n")
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+        tmp.write(cfg)
+        tmp.close()
+
+        win = f"Person Counter  |  {label}  |  pressione Q" if show_window else ""
+        if show_window:
+            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+
+        states.append(_Source(
+            idx=i, label=label, window=win, is_webcam=is_w,
+            cap=cap, model=model, resolved_device=resolved_device,
+            tracker_path=tmp.name, total_frames=total,
+        ))
+
+    threads = []
+    for s in states:
+        t = threading.Thread(target=_worker, daemon=True,
+                             args=(s, shared, tolerance, sample_rate,
+                                   img_size, show_window))
+        t.start()
+        threads.append(t)
+
+    last_print = 0.0
+    while not shared.stop_event.is_set():
+        if all(s.done for s in states):
+            break
+
+        if show_window:
+            for s in states:
+                if s.latest_frame is not None:
+                    cv2.imshow(s.window, s.latest_frame)
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 print("\n  Interrompido pelo usuário.")
+                shared.stop_event.set()
                 break
+        else:
+            time.sleep(0.01)
 
-        frame_num += 1
+        now = time.monotonic()
+        if now - last_print >= 0.1:
+            last_print = now
+            _print_status(states, shared)
 
-    cap.release()
-    os.unlink(tracker_path)
+    shared.stop_event.set()
+    for t in threads:
+        t.join(timeout=5)
+
+    for s in states:
+        s.cap.release()
+        try:
+            os.unlink(s.tracker_path)
+        except OSError:
+            pass
+
     if show_window:
         cv2.destroyAllWindows()
     print()
+    return len(shared.unique_people)
 
-    return len(unique_people)
 
-# Funcao principal, organizacao e tudo na vida ne?
 def main():
     parser = argparse.ArgumentParser(
         description="Contador de pessoas insano",
     )
-    source = parser.add_mutually_exclusive_group(required=True)
-    source.add_argument("video", nargs="?",
-        help="Caminho para o arquivo de vídeo")
-    source.add_argument("--webcam", type=int, nargs="?", const=0,
-        metavar="IDX",
-        help="Usa webcam como fonte. IDX é o índice da câmera (padrão: 0).")
+    parser.add_argument("video", nargs="*", metavar="ARQUIVO",
+        help="Caminho(s) para arquivo(s) de vídeo (um ou mais).")
+    parser.add_argument("--webcam", type=int, nargs="?", const=0,
+        action="append", metavar="IDX",
+        help="Usa webcam como fonte. IDX é o índice da câmera (padrão: 0). "
+             "Repita o flag para usar várias webcams.")
     parser.add_argument("--tolerance", type=float, default=0.005,
         metavar="N",
         help="Limiar de similaridade de aparência (0–0.35). Padrão: 0.005")
@@ -338,20 +393,26 @@ def main():
         help="Hardware: 'cuda' (NVIDIA), 'mps' (Apple Silicon), 'intel:gpu' (Intel GPU), 'intel:cpu' (Intel CPU), 'cpu'. "
              "Padrão: detecta automaticamente.")
     parser.add_argument("--no-window", action="store_true",
-        help="Roda sem abrir janela (modo headless).")
+        help="Roda sem abrir janelas (modo headless).")
     args = parser.parse_args()
 
-    if args.webcam is not None:
-        source_desc = f"📹  Webcam {args.webcam}"
-    else:
-        if not os.path.isfile(args.video):
-            print(f"Erro: arquivo não encontrado → {args.video}")
+    sources: list[tuple[bool, int | str, str]] = []
+    for p in args.video:
+        if not os.path.isfile(p):
+            print(f"Erro: arquivo não encontrado → {p}")
             sys.exit(1)
-        source_desc = f"🎬  {args.video}"
+        sources.append((False, p, os.path.basename(p)))
+    for idx in args.webcam or []:
+        sources.append((True, idx, f"Webcam {idx}"))
+
+    if not sources:
+        parser.error("especifique ao menos uma fonte (arquivo de vídeo ou --webcam).")
 
     device, device_desc = detect_device(args.device)
 
-    print(f"\n{source_desc}")
+    print()
+    for is_w, val, label in sources:
+        print(f"  {'📹' if is_w else '🎬'}  {label}")
     print(f"    modelo:       {args.model}")
     print(f"    hardware:     {device_desc}")
     print(f"    tolerância:   {args.tolerance}  "
@@ -359,14 +420,13 @@ def main():
           f"img-size: {args.img_size}\n")
 
     count = count_unique_people(
-        args.video,
+        sources,
         tolerance=args.tolerance,
         sample_rate=args.sample_rate,
         img_size=args.img_size,
         show_window=not args.no_window,
         device=device,
         model_name=args.model,
-        webcam=args.webcam is not None,
     )
 
     print(f"\n  Pessoas únicas encontradas: {count}\n")
