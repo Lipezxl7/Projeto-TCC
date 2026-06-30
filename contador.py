@@ -144,6 +144,8 @@ def cosine_dist(a: np.ndarray, b: np.ndarray) -> float:
 def draw_box(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int,
              person_id: int, confirmed: bool) -> None:
     """Desenha bounding box e label da pessoa no frame."""
+    if not confirmed and person_id != -1:
+        confirmed = person_id > 0
     color = COLORS[(person_id - 1) % len(COLORS)] if confirmed else (160, 160, 160)
     label = f"Pessoa {person_id}" if confirmed else "identificando..."
 
@@ -197,7 +199,7 @@ class _Source:
     track_features: dict = field(default_factory=dict)
     track_to_person: dict = field(default_factory=dict)
     frame_num: int = 0
-    done: bool = False
+    done: threading.Event = field(default_factory=threading.Event)
     latest_frame: object = None
 
 
@@ -210,12 +212,12 @@ def _worker(src: _Source, shared: _Shared, tolerance: float,
     if src.resolved_device is not None:
         track_kwargs["device"] = src.resolved_device
 
-    while not shared.stop_event.is_set() and not src.done:
+    while not shared.stop_event.is_set() and not src.done.is_set():
         ret, frame = src.cap.read()
         if not ret:
             if src.is_webcam:
                 print(f"\n  Perda de conexao com {src.label}.")
-            src.done = True
+            src.done.set()
             break
 
         results = src.model.track(frame, **track_kwargs)
@@ -254,7 +256,7 @@ def _worker(src: _Source, shared: _Shared, tolerance: float,
                             src.track_to_person[tid] = len(shared.unique_people)
 
                 if show_window:
-                    person_id = src.track_to_person.get(tid, 0)
+                    person_id = src.track_to_person.get(tid, -1)
                     draw_box(frame, x1, y1, x2, y2,
                              person_id=person_id,
                              confirmed=(person_id > 0))
@@ -288,77 +290,79 @@ def count_unique_people(
     shared = _Shared()
     states: list[_Source] = []
 
-    for i, (is_w, value, label) in enumerate(sources):
-        model, resolved_device = load_model(device, model_name)
+    try:
+        for i, (is_w, value, label) in enumerate(sources):
+            model, resolved_device = load_model(device, model_name)
 
-        cap = cv2.VideoCapture(int(value)) if is_w else cv2.VideoCapture(value)
-        if not cap.isOpened():
-            if is_w:
-                raise RuntimeError(f"Não foi possível abrir a webcam {value}")
-            raise FileNotFoundError(f"Não foi possível abrir: {value}")
+            cap = cv2.VideoCapture(int(value)) if is_w else cv2.VideoCapture(value)
+            if not cap.isOpened():
+                if is_w:
+                    raise RuntimeError(f"Não foi possível abrir a webcam {value}")
+                raise FileNotFoundError(f"Não foi possível abrir: {value}")
 
-        total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        buf = total if total > 0 and not is_w else 900
+            total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            buf = total if total > 0 and not is_w else 900
 
-        cfg = (f"tracker_type: bytetrack\ntrack_high_thresh: 0.50\n"
-               f"track_low_thresh: 0.10\nnew_track_thresh: 0.60\n"
-               f"track_buffer: {buf}\nmatch_thresh: 0.80\nfuse_score: true\n")
-        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
-        tmp.write(cfg)
-        tmp.close()
+            cfg = (f"tracker_type: bytetrack\ntrack_high_thresh: 0.50\n"
+                   f"track_low_thresh: 0.10\nnew_track_thresh: 0.60\n"
+                   f"track_buffer: {buf}\nmatch_thresh: 0.80\nfuse_score: true\n")
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
+            tmp.write(cfg)
+            tmp.close()
 
-        win = f"Person Counter  |  {label}  |  pressione Q" if show_window else ""
-        if show_window:
-            cv2.namedWindow(win, cv2.WINDOW_NORMAL)
+            win = f"Person Counter  |  {label}  |  pressione Q" if show_window else ""
+            if show_window:
+                cv2.namedWindow(win, cv2.WINDOW_NORMAL)
 
-        states.append(_Source(
-            idx=i, label=label, window=win, is_webcam=is_w,
-            cap=cap, model=model, resolved_device=resolved_device,
-            tracker_path=tmp.name, total_frames=total,
-        ))
+            states.append(_Source(
+                idx=i, label=label, window=win, is_webcam=is_w,
+                cap=cap, model=model, resolved_device=resolved_device,
+                tracker_path=tmp.name, total_frames=total,
+            ))
 
-    threads = []
-    for s in states:
-        t = threading.Thread(target=_worker, daemon=True,
-                             args=(s, shared, tolerance, sample_rate,
-                                   img_size, show_window))
-        t.start()
-        threads.append(t)
+        threads = []
+        for s in states:
+            t = threading.Thread(target=_worker, daemon=True,
+                                 args=(s, shared, tolerance, sample_rate,
+                                       img_size, show_window))
+            t.start()
+            threads.append(t)
 
-    last_print = 0.0
-    while not shared.stop_event.is_set():
-        if all(s.done for s in states):
-            break
-
-        if show_window:
-            for s in states:
-                if s.latest_frame is not None:
-                    cv2.imshow(s.window, s.latest_frame)
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                print("\n  Interrompido pelo usuário.")
-                shared.stop_event.set()
+        last_print = 0.0
+        while not shared.stop_event.is_set():
+            if all(s.done.is_set() for s in states):
                 break
-        else:
-            time.sleep(0.01)
 
-        now = time.monotonic()
-        if now - last_print >= 0.1:
-            last_print = now
-            _print_status(states, shared)
+            if show_window:
+                for s in states:
+                    if s.latest_frame is not None:
+                        cv2.imshow(s.window, s.latest_frame)
+                if cv2.waitKey(1) & 0xFF == ord("q"):
+                    print("\n  Interrompido pelo usuário.")
+                    shared.stop_event.set()
+                    break
+            else:
+                time.sleep(0.01)
 
-    shared.stop_event.set()
-    for t in threads:
-        t.join(timeout=5)
+            now = time.monotonic()
+            if now - last_print >= 0.1:
+                last_print = now
+                _print_status(states, shared)
 
-    for s in states:
-        s.cap.release()
-        try:
-            os.unlink(s.tracker_path)
-        except OSError:
-            pass
+        shared.stop_event.set()
+        for t in threads:
+            t.join(timeout=5)
 
-    if show_window:
-        cv2.destroyAllWindows()
+    finally:
+        for s in states:
+            s.cap.release()
+            try:
+                os.unlink(s.tracker_path)
+            except OSError:
+                pass
+
+        if show_window:
+            cv2.destroyAllWindows()
     print()
     return len(shared.unique_people)
 
