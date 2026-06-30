@@ -363,7 +363,7 @@ def count_unique_people(
     return len(shared.unique_people)
 
 
-def main():
+def NumerarPessoas():
     parser = argparse.ArgumentParser(
         description="Contador de pessoas insano",
     )
@@ -429,7 +429,7 @@ def main():
         model_name=args.model,
     )
 
-    print(f"\n  Pessoas únicas encontradas: {count}\n")
+    return count
 
 if __name__ == "__main__":
-    main()
+    print(f"\n  Pessoas únicas encontradas: {NumerarPessoas()}\n")
