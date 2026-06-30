@@ -294,7 +294,7 @@ def _print_status(states: list[_Source], shared: _Shared) -> None:
 def count_unique_people(
         sources: list[tuple[bool, int | str, str]],
         tolerance: float = 0.005,
-        sample_rate: int = 1, img_size: int = 640,
+        sample_rate: int = 3, img_size: int = 640,
         show_window: bool = True, device: str = "cpu",
         model_name: str = "yolo26n.pt") -> int:
 
@@ -391,9 +391,9 @@ def NumerarPessoas():
     parser.add_argument("--tolerance", type=float, default=0.005,
         metavar="N",
         help="Limiar de similaridade de aparência (0–0.35). Padrão: 0.005")
-    parser.add_argument("--sample-rate", type=int, default=1,
+    parser.add_argument("--sample-rate", type=int, default=3,
         metavar="N",
-        help="Atualiza aparência 1× a cada N frames. Padrão: 1")
+        help="Atualiza aparência 1× a cada N frames. Padrão: 3")
     parser.add_argument("--img-size", type=int, default=640,
         choices=[320, 480, 640, 768, 1024, 1280, 1536, 2048],
         metavar="N",
