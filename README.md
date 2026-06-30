@@ -111,7 +111,7 @@ contador.py
 │   ├── _Shared                    → Registro compartilhado de pessoas únicas (lock)
 │   └── _Source                    → Estado por fonte (modelo, tracker, dicionários)
 └── CLI
-    └── main()                     → Argumentos, configuração, orquestração
+    └── NumerarPessoas()          → Argumentos, configuração, orquestração
 ```
 
 ### Re-identificação
