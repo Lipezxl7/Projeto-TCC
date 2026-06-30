@@ -11,7 +11,7 @@ Source of truth order when anything conflicts: **`contador.py` > `CONTEXT.md` > 
 
 - **Type:** Undergraduate thesis (Trabalho de Conclusão de Curso — TCC).
 - **Language of code comments / labels / console output:** **Portuguese**. This doc and `README.md` are in English.
-- **Shape:** Single-file application — `contador.py` (435 lines). No subpackages, no modules.
+- **Shape:** Single-file application — `contador.py` (~450 lines). No subpackages, no modules.
 - **Repository:** https://codeberg.org/yLipe/Projeto-TCC (Codeberg, **not** GitHub).
 - **Python:** 3.14+ required (uses `match/case`, PEP 604 `str | None`).
 
@@ -65,29 +65,29 @@ pip install -r requirements.txt
 Single file, layered:
 
 ```
-contador.py (single file – all logic, 435 lines)
+contador.py (single file – all logic, ~450 lines)
 ├── Device Selection Layer
 │   ├── auto_device_selection()   → CUDA → MPS → Intel GPU → Intel CPU → CPU      [contador.py:16]
 │   └── detect_device()           → match/case on user pref; fallback to auto      [contador.py:31]
 ├── Model Loading Layer
 │   └── load_model()              → YOLO load; optional OpenVINO export + compile   [contador.py:53]
 ├── Appearance Features Layer
-│   ├── extract_appearance()      → 288-dim HSV histogram (48×96, top/bottom split) [contador.py:122]
-│   └── cosine_dist()             → 1 − normalized dot product                      [contador.py:136]
+│   ├── extract_appearance()      → 360-dim HSV histogram (48×96, top/bottom split, V-chan + 1.2× bottom) [contador.py:122]
+│   └── cosine_dist()             → 1 − normalized dot product                      [contador.py:140]
 ├── Visualization Layer
 │   ├── COLORS                    → 8-color BGR palette (cyclic by person ID)       [contador.py:106]
-│   ├── draw_box()                → color-coded box + label (or gray if unconfirmed)[contador.py:144]
-│   └── draw_overlay()            → semi-transparent "Pessoas unicas: N" panel       [contador.py:162]
+│   ├── draw_box()                → color-coded box + label (or gray if unconfirmed)[contador.py:148]
+│   └── draw_overlay()            → semi-transparent "Pessoas unicas: N" panel       [contador.py:168]
 ├── Multi-Source / Threading Layer
-│   ├── _Shared (dataclass)       → shared registry: unique_people + lock + stop    [contador.py:179]
-│   ├── _Source (dataclass)       → per-source state: model, tracker, dicts, cap    [contador.py:186]
-│   ├── _worker()                 → per-source daemon thread main loop              [contador.py:204]
-│   └── _print_status()           → throttled combined progress line (≤10 Hz)       [contador.py:269]
+│   ├── _Shared (dataclass)       → shared registry: unique_people + lock + stop    [contador.py:185]
+│   ├── _Source (dataclass)       → per-source state: model, tracker, dicts, cap    [contador.py:192]
+│   ├── _worker()                 → per-source daemon thread main loop              [contador.py:210]
+│   └── _print_status()           → throttled combined progress line (≤10 Hz)       [contador.py:280]
 ├── Core Orchestration
-│   └── count_unique_people()     → builds sources, spawns threads, owns GUI loop   [contador.py:281]
+│   └── count_unique_people()     → builds sources, spawns threads, owns GUI loop   [contador.py:292]
 └── CLI Entry Point
-    ├── NumerarPessoas()          → argparse, validation, device detect, summary    [contador.py:366]
-    └── __main__                  → prints final count                              [contador.py:434]
+    ├── NumerarPessoas()          → argparse, validation, device detect, summary    [contador.py:380]
+    └── __main__                  → prints final count                              [contador.py:449]
 ```
 
 **Note:** The CLI entry function is `NumerarPessoas()` (renamed from `main()` in commit `9dbac85`). It returns the final unique-person count, which `__main__` prints.
@@ -112,41 +112,43 @@ The returned `None` is passed to `model.track()` (see `_worker`, `contador.py:21
 
 ### Appearance-based re-identification
 `extract_appearance(crop)` (`contador.py:122`):
-- Returns `None` if `crop` is `None`, empty, or smaller than **10 px** in either dimension.
+- Returns `None` if `crop` is `None`, empty, smaller than **10 px** in either dimension, or with extreme aspect ratio (`w/h < 0.15` or `w/h > 6.0`).
 - Resizes crop to **48×96** (width×height), converts to HSV.
 - Splits into **top half** (`hsv[:48]`) and **bottom half** (`hsv[48:]`) — i.e. upper/lower body.
-- Per region: 2D H-S histogram with **H=18 bins** (range 0–180), **S=8 bins** (range 0–256), normalized via `cv2.normalize` (default `NORM_MINMAX`) then flattened → 144 dims/region.
-- Concatenates both regions → **288-dimensional** feature vector.
+- Per region: 2D H-S histogram with **H=18 bins** (range 0–180), **S=8 bins** (range 0–256), normalized via `cv2.normalize` (default `NORM_MINMAX`) then flattened → 144 dims/region, **plus** a 1D V histogram with **18 bins** (range 0–256), normalized → 18 dims/region.
+- Bottom-half features are **spatially weighted by 1.2×** (bottom region is more pose-invariant).
+- Concatenates both regions → **360-dimensional** feature vector (168 dims top + 180 dims bottom including the 1.2× weight).
 
 `cosine_dist(a, b)` (`contador.py:136`): `1 − dot(a,b)/(‖a‖·‖b‖)`; returns `1.0` if either norm is zero.
 
 ### Re-ID magic numbers (tuned — flag before changing)
-- **Track-level feature EMA:** `0.7 * old + 0.3 * new` (`contador.py:234`).
-- **Person-level canonical EMA:** `0.6 * old + 0.4 * new` (`contador.py:248`).
+- **Track-level feature EMA:** `0.7 * old + 0.3 * new` (`contador.py:244`).
+- **Person-level canonical EMA:** `0.6 * old + 0.4 * new` (`contador.py:258`), **followed by L2 normalization** to keep canonical vectors on the unit sphere.
 - **Default cosine-distance tolerance:** `0.005` (recommended range **0.003–0.10**).
+- **Spatial weight (bottom half):** `1.2×` — bottom-body features are more stable across poses.
 - These look arbitrary but are tuned. Do not adjust without explicit intent.
 
 ### Tracking strategy
-- **Detector:** YOLO26, person class only (`classes=[0]`), `conf=0.40`, `iou=0.60`, `verbose=False`, `persist=True`.
-- **Tracker:** ByteTrack via a **runtime-generated temp YAML** (`contador.py:303`):
+- **Detector:** YOLO26, person class only (`classes=[0]`), `conf=0.50`, `iou=0.60`, `verbose=False`, `persist=True`.
+- **Tracker:** ByteTrack via a **runtime-generated temp YAML** (`contador.py:306`):
   ```yaml
   tracker_type: bytetrack
-  track_high_thresh: 0.50      # high-confidence threshold
+  track_high_thresh: 0.55      # high-confidence threshold
   track_low_thresh: 0.10       # low-confidence threshold
-  new_track_thresh: 0.60       # new-track initialization
+  new_track_thresh: 0.65       # new-track initialization
   track_buffer: {buf}          # video: total frame count; webcam/unknown: 900
-  match_thresh: 0.80           # association threshold
+  match_thresh: 0.75           # association threshold
   fuse_score: true             # combine detection + track scores
   ```
 - **`track_buffer` (`buf`) logic** (`contador.py:300`): `buf = total if total > 0 and not is_webcam else 900`. So a video whose frame count is detectable gets `buf = total frames` (tracks never expire mid-video); webcams **and** videos with `total <= 0` get `buf = 900`.
 - To change tracker params, edit the `cfg` template string in `count_unique_people()` — there is **no checked-in config file**. The temp YAML is deleted on cleanup.
 
 ### Person identity assignment (atomic, lock-guarded)
-In `_worker()` (`contador.py:239`):
+In `_worker()` (`contador.py:249`):
 - Feature extraction only runs when `frame_num % sample_rate == 0` and `extract_appearance` returns non-`None`.
 - A track is assigned a person **only on first appearance with a valid feature**, guarded by `shared.people_lock`. The match-or-append block must stay atomic to avoid duplicate person IDs across threads.
-- Matching: linear scan of `shared.unique_people`; first entry with `cosine_dist(feat, rep) <= tolerance` wins → that person's canonical vector is EMA-updated and `track_to_person[tid] = matched_idx + 1` (1-based).
-- No match → append `feat` as a new person; `track_to_person[tid] = len(unique_people)`.
+- Matching: linear scan of `shared.unique_people`; entry with the **minimum** cosine distance that is also `≤ tolerance` wins → that person's canonical vector is EMA-updated, **L2-normalized**, and `track_to_person[tid] = best_idx + 1` (1-based). This avoids a borderline match on an early entry stealing the track from a closer person later in the list.
+- No match → append `feat` (L2-normalized) as a new person; `track_to_person[tid] = len(unique_people)`.
 - **A track keeps its first-assigned person for the entire run** — the `if tid not in track_to_person` guard means later feature drift on that track never re-resolves its identity.
 - Unconfirmed tracks (no person ID yet) are drawn gray with label `identificando...`.
 
@@ -188,7 +190,7 @@ Defined in `NumerarPessoas()` (`contador.py:366`). `video` (positional, `nargs="
 
 ```python
 # Per source (_Source):
-track_features:  dict[int, np.ndarray]  # track_id → appearance vector (running EMA, 288-dim)
+track_features:  dict[int, np.ndarray]  # track_id → appearance vector (running EMA, 360-dim)
 track_to_person: dict[int, int]         # track_id → unique person number (1-based)
 latest_frame:    object                 # last annotated frame, for main-thread display
 frame_num:       int                    # frame counter (drives sample_rate)
@@ -214,7 +216,7 @@ Resolves hardware via `match/case` on user preference; falls back to `auto_devic
 Loads YOLO. For `openvino:*`: exports to IR on first run (cached), compiles via `ov.Core()` for verification, returns `(YOLO(ov_path), None)`. Otherwise returns `(YOLO(model_name), device)`.
 
 ### `extract_appearance(crop: np.ndarray) → np.ndarray | None` — `contador.py:122`
-288-dim HSV histogram (48×96 crop, top/bottom split, 18×8 bins each). Returns `None` if crop < 10 px.
+360-dim HSV histogram (48×96 crop, top/bottom split, 18×8 H-S bins + 18 V bins each, 1.2× bottom weight). Returns `None` if crop < 10 px or extreme aspect ratio.
 
 ### `cosine_dist(a: np.ndarray, b: np.ndarray) → float` — `contador.py:136`
 `1 − normalized dot product`; `1.0` if either vector has zero norm.
@@ -338,7 +340,7 @@ python contador.py video.mp4 --img-size 1536 --model yolo26x.pt --tolerance 0.00
 
 1. **OpenVINO device handling** (`load_model`, `contador.py:53`): compile via `ov.Core().compile_model()` for verification; pass `device=None` to `track()`. Do **not** forward the OpenVINO device string to `track()` — ultralytics' `select_device()` would interpret `"GPU"` as CUDA and crash with `Invalid CUDA device`.
 2. **ByteTrack config is runtime-generated** (`contador.py:303`). `track_buffer = total frames` for videos with a detectable frame count; `900` for webcams **and** videos with `total <= 0`. Edit the `cfg` template string, not a config file.
-3. **Re-ID magic numbers** (288-dim HSV, 0.7/0.3 track EMA, 0.6/0.4 person EMA, tolerance 0.005) are tuned — flag before changing.
+3. **Re-ID magic numbers** (360-dim HSV, 0.7/0.3 track EMA, 0.6/0.4 person EMA + L2-norm, 1.2× bottom weight, tolerance 0.005) are tuned — flag before changing.
 4. **Multi-source threading**: one YOLO per source (independent ByteTrack `persist=True` state); shared `unique_people` guarded by `people_lock`; the match-or-append block must stay atomic. Do not remove the lock or merge model instances.
 5. **Main thread owns the GUI**: workers draw + store `latest_frame`; only the main thread calls `cv2.imshow`/`cv2.waitKey`. Do not move these into worker threads.
 6. **Track identity is sticky**: once `track_to_person[tid]` is set, it is never re-resolved, even as features drift.

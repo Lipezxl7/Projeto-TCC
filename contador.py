@@ -122,15 +122,23 @@ COLORS = [
 def extract_appearance(crop: np.ndarray) -> np.ndarray | None:
     if crop is None or crop.size == 0 or crop.shape[0] < 10 or crop.shape[1] < 10:
         return None
+    h_crop, w_crop = crop.shape[:2]
+    aspect = w_crop / h_crop
+    if aspect < 0.15 or aspect > 6.0:
+        return None
     img = cv2.resize(crop, (48, 96))
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     def hist(region):
         h = cv2.calcHist([region], [0, 1], None, [18, 8], [0, 180, 0, 256])
         cv2.normalize(h, h)
-        return h.flatten()
+        v = cv2.calcHist([region], [2], None, [18], [0, 256])
+        cv2.normalize(v, v)
+        return np.concatenate([h.flatten(), v.flatten()])
 
-    return np.concatenate([hist(hsv[:48]), hist(hsv[48:])])
+    top = hist(hsv[:48])
+    bottom = hist(hsv[48:]) * 1.2
+    return np.concatenate([top, bottom])
 
 
 def cosine_dist(a: np.ndarray, b: np.ndarray) -> float:
@@ -207,7 +215,7 @@ def _worker(src: _Source, shared: _Shared, tolerance: float,
             sample_rate: int, img_size: int, show_window: bool) -> None:
     track_kwargs = dict(
         persist=True, tracker=src.tracker_path, classes=[0],
-        conf=0.40, iou=0.60, imgsz=img_size, verbose=False,
+        conf=0.50, iou=0.60, imgsz=img_size, verbose=False,
     )
     if src.resolved_device is not None:
         track_kwargs["device"] = src.resolved_device
@@ -241,18 +249,21 @@ def _worker(src: _Source, shared: _Shared, tolerance: float,
                 if tid not in src.track_to_person and tid in src.track_features:
                     feat = src.track_features[tid]
                     with shared.people_lock:
-                        matched_idx = next(
-                            (i for i, rep in enumerate(shared.unique_people)
-                             if cosine_dist(feat, rep) <= tolerance),
-                            None,
-                        )
-                        if matched_idx is not None:
-                            shared.unique_people[matched_idx] = (
-                                0.6 * shared.unique_people[matched_idx] + 0.4 * feat
-                            )
-                            src.track_to_person[tid] = matched_idx + 1
+                        best_idx = None
+                        best_dist = float("inf")
+                        for i, rep in enumerate(shared.unique_people):
+                            d = cosine_dist(feat, rep)
+                            if d <= tolerance and d < best_dist:
+                                best_dist = d
+                                best_idx = i
+                        if best_idx is not None:
+                            updated = 0.6 * shared.unique_people[best_idx] + 0.4 * feat
+                            updated /= np.linalg.norm(updated)
+                            shared.unique_people[best_idx] = updated
+                            src.track_to_person[tid] = best_idx + 1
                         else:
-                            shared.unique_people.append(feat)
+                            norm = np.linalg.norm(feat)
+                            shared.unique_people.append(feat / norm if norm > 0 else feat)
                             src.track_to_person[tid] = len(shared.unique_people)
 
                 if show_window:
@@ -303,9 +314,9 @@ def count_unique_people(
             total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             buf = total if total > 0 and not is_w else 900
 
-            cfg = (f"tracker_type: bytetrack\ntrack_high_thresh: 0.50\n"
-                   f"track_low_thresh: 0.10\nnew_track_thresh: 0.60\n"
-                   f"track_buffer: {buf}\nmatch_thresh: 0.80\nfuse_score: true\n")
+            cfg = (f"tracker_type: bytetrack\ntrack_high_thresh: 0.55\n"
+                   f"track_low_thresh: 0.10\nnew_track_thresh: 0.65\n"
+                   f"track_buffer: {buf}\nmatch_thresh: 0.75\nfuse_score: true\n")
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False)
             tmp.write(cfg)
             tmp.close()
