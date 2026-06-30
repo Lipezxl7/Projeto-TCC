@@ -69,7 +69,7 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
 
         if not os.path.isdir(ov_path):
             print("  Exportando modelo para OpenVINO (so na 1a execucao)...")
-            YOLO(model_name).export(format="openvino", half=False, dynamic=True)
+            YOLO(model_name).export(format="openvino", quantize=16, dynamic=True)
             print("  Exportacao concluida.\n")
 
         # Compila o modelo diretamente via OpenVINO Core apontando para o
