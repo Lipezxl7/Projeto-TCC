@@ -5,3 +5,4 @@ openvino
 pandas
 pdfplumber
 openpyxl
+streamlit
