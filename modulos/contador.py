@@ -2,6 +2,7 @@ import cv2
 import numpy as np
 import argparse
 import os
+import queue
 import sys
 import tempfile
 import threading
@@ -32,7 +33,7 @@ def detect_device(preferred: str | None = None) -> tuple[str, str]:
     intel_available_devices = ov.Core().available_devices
 
     if preferred:
-        p = preferred.lower()
+        p = str(preferred).lower()
 
         match p:
             case "cuda" if torch.cuda.is_available():
@@ -50,6 +51,24 @@ def detect_device(preferred: str | None = None) -> tuple[str, str]:
 
     return auto_device_selection(intel_available_devices)
 
+def _garantir_openvino_runtime() -> None:
+    """Ultralytics antigo faz 'from openvino.runtime import Core' — alias que o
+    OpenVINO 2025+ removeu. Injeta um shim apontando pro módulo novo."""
+    try:
+        import openvino.runtime  # noqa: F401  (versões antigas: alias existe)
+        return
+    except ImportError:
+        pass
+
+    import openvino as _ov
+    import types as _types
+    mod = _types.ModuleType("openvino.runtime")
+    for nome in ("Core", "Layout", "get_batch", "OrtApi", "ie_api"):
+        if hasattr(_ov, nome):
+            setattr(mod, nome, getattr(_ov, nome))
+    sys.modules["openvino.runtime"] = mod
+
+
 def load_model(device: str, model_name: str = "yolo26n.pt"):
     """
     Carrega o modelo YOLO correto para o device.
@@ -63,14 +82,31 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
     """
 
     if device.startswith("openvino:"):
+        _garantir_openvino_runtime()
+
         ov_target = device.split(":", 1)[1]   # "CPU" ou "GPU"
         stem    = model_name.replace(".pt", "")
         ov_path = f"{stem}_openvino_model"
 
         if not os.path.isdir(ov_path):
             print("  Exportando modelo para OpenVINO (so na 1a execucao)...")
-            YOLO(model_name).export(format="openvino", quantize=16, dynamic=True)
+            try:
+                YOLO(model_name).export(format="openvino", quantize=16, dynamic=True)
+            except TypeError:
+                # ultralytics sem suporte a 'quantize' (versao antiga)
+                YOLO(model_name).export(format="openvino", dynamic=True)
+            except Exception as e:
+                raise RuntimeError(
+                    f"Falha ao exportar '{model_name}' para OpenVINO: {e}. "
+                    f"Rode 'pip install onnx' e 'pip install -U ultralytics'."
+                ) from e
             print("  Exportacao concluida.\n")
+
+        if not os.path.isdir(ov_path):
+            raise RuntimeError(
+                f"Exportacao OpenVINO nao gerou a pasta '{ov_path}'. "
+                f"Use um modelo ja exportado (ex: yolo26n.pt)."
+            )
 
         # Compila o modelo diretamente via OpenVINO Core apontando para o
         # device correto (CPU ou GPU Intel). Isso e feito ANTES do ultralytics
@@ -94,7 +130,20 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
 
         # None como device: model.track() nao recebera "GPU"/"CPU" e nao
         # tentara resolver via PyTorch/CUDA, evitando o erro que eu tava tentando resolver a 1 hora.
-        return YOLO(ov_path), None
+        model = YOLO(ov_path)
+
+        # Pre-validacao: 1 inferencia dummy p/ falhar cedo (msg clara) se houver
+        # incompatibilidade entre ultralytics e openvino.
+        try:
+            model.predict(np.zeros((64, 64, 3), dtype=np.uint8), verbose=False)
+        except Exception as e:
+            raise RuntimeError(
+                f"Modelo OpenVINO carregado mas a inferencia falhou: {e}. "
+                f"Incompatibilidade entre ultralytics {__import__('ultralytics').__version__} "
+                f"e openvino {ov.__version__}."
+            ) from e
+
+        return model, None
 
     return YOLO(model_name), device
 
@@ -191,6 +240,7 @@ class _Shared:
     unique_people: list = field(default_factory=list)
     people_lock: threading.Lock = field(default_factory=threading.Lock)
     stop_event: threading.Event = field(default_factory=threading.Event)
+    error: str | None = None
 
 
 @dataclass
@@ -212,7 +262,8 @@ class _Source:
 
 
 def _worker(src: _Source, shared: _Shared, tolerance: float,
-            sample_rate: int, img_size: int, show_window: bool) -> None:
+            sample_rate: int, img_size: int, show_window: bool,
+            frame_queue=None, stop_event=None) -> None:
     track_kwargs = dict(
         persist=True, tracker=src.tracker_path, classes=[0],
         conf=0.50, iou=0.60, imgsz=img_size, verbose=False,
@@ -220,7 +271,11 @@ def _worker(src: _Source, shared: _Shared, tolerance: float,
     if src.resolved_device is not None:
         track_kwargs["device"] = src.resolved_device
 
-    while not shared.stop_event.is_set() and not src.done.is_set():
+    want_display = show_window or frame_queue is not None
+
+    while (not shared.stop_event.is_set()
+           and (stop_event is None or not stop_event.is_set())
+           and not src.done.is_set()):
         ret, frame = src.cap.read()
         if not ret:
             if src.is_webcam:
@@ -228,53 +283,75 @@ def _worker(src: _Source, shared: _Shared, tolerance: float,
             src.done.set()
             break
 
-        results = src.model.track(frame, **track_kwargs)
+        try:
+            results = src.model.track(frame, **track_kwargs)
 
-        if results[0].boxes.id is not None:
-            boxes = results[0].boxes.xyxy.cpu().numpy().astype(int)
-            track_ids = results[0].boxes.id.int().cpu().numpy()
+            if results[0].boxes.id is not None:
+                # Filtra caixas invalidas (NaN/inf gerados pelo tracker)
+                boxes_f = results[0].boxes.xyxy.cpu().numpy()
+                valido = np.isfinite(boxes_f).all(axis=1)
+                boxes = boxes_f[valido].astype(int)
+                track_ids = results[0].boxes.id.int().cpu().numpy()[valido]
 
-            for box, tid in zip(boxes, track_ids):
-                x1, y1, x2, y2 = box
+                for box, tid in zip(boxes, track_ids):
+                    x1, y1, x2, y2 = box
+                    if x2 <= x1 or y2 <= y1:
+                        continue
 
-                if src.frame_num % sample_rate == 0:
-                    crop = frame[max(0, y1):y2, max(0, x1):x2]
-                    feat = extract_appearance(crop)
-                    if feat is not None:
-                        src.track_features[tid] = (
-                            0.7 * src.track_features[tid] + 0.3 * feat
-                            if tid in src.track_features else feat
-                        )
+                    if src.frame_num % sample_rate == 0:
+                        crop = frame[max(0, y1):y2, max(0, x1):x2]
+                        feat = extract_appearance(crop)
+                        if feat is not None:
+                            src.track_features[tid] = (
+                                0.7 * src.track_features[tid] + 0.3 * feat
+                                if tid in src.track_features else feat
+                            )
 
-                if tid not in src.track_to_person and tid in src.track_features:
-                    feat = src.track_features[tid]
-                    with shared.people_lock:
-                        best_idx = None
-                        best_dist = float("inf")
-                        for i, rep in enumerate(shared.unique_people):
-                            d = cosine_dist(feat, rep)
-                            if d <= tolerance and d < best_dist:
-                                best_dist = d
-                                best_idx = i
-                        if best_idx is not None:
-                            updated = 0.6 * shared.unique_people[best_idx] + 0.4 * feat
-                            updated /= np.linalg.norm(updated)
-                            shared.unique_people[best_idx] = updated
-                            src.track_to_person[tid] = best_idx + 1
-                        else:
-                            norm = np.linalg.norm(feat)
-                            shared.unique_people.append(feat / norm if norm > 0 else feat)
-                            src.track_to_person[tid] = len(shared.unique_people)
+                    if tid not in src.track_to_person and tid in src.track_features:
+                        feat = src.track_features[tid]
+                        with shared.people_lock:
+                            best_idx = None
+                            best_dist = float("inf")
+                            for i, rep in enumerate(shared.unique_people):
+                                d = cosine_dist(feat, rep)
+                                if d <= tolerance and d < best_dist:
+                                    best_dist = d
+                                    best_idx = i
+                            if best_idx is not None:
+                                updated = 0.6 * shared.unique_people[best_idx] + 0.4 * feat
+                                updated /= np.linalg.norm(updated)
+                                shared.unique_people[best_idx] = updated
+                                src.track_to_person[tid] = best_idx + 1
+                            else:
+                                norm = np.linalg.norm(feat)
+                                shared.unique_people.append(feat / norm if norm > 0 else feat)
+                                src.track_to_person[tid] = len(shared.unique_people)
 
+                    if want_display:
+                        person_id = src.track_to_person.get(tid, -1)
+                        draw_box(frame, x1, y1, x2, y2,
+                                 person_id=person_id,
+                                 confirmed=(person_id > 0))
+
+            if want_display:
+                with shared.people_lock:
+                    total_unicos = len(shared.unique_people)
+                draw_overlay(frame, total_unicos)
+                if frame_queue is not None:
+                    try:
+                        frame_queue.put_nowait(frame)
+                    except queue.Full:
+                        pass
                 if show_window:
-                    person_id = src.track_to_person.get(tid, -1)
-                    draw_box(frame, x1, y1, x2, y2,
-                             person_id=person_id,
-                             confirmed=(person_id > 0))
-
-        if show_window:
-            draw_overlay(frame, len(shared.unique_people))
-            src.latest_frame = frame
+                    src.latest_frame = frame
+        except Exception as e:
+            # Nao deixa a thread morrer em silencio (travaria o loop principal
+            # esperando por done) — registra o erro e encerra a fonte.
+            print(f"\n  Erro no worker ({src.label}): {type(e).__name__}: {e}")
+            with shared.people_lock:
+                shared.error = f"{src.label}: {type(e).__name__}: {e}"
+            src.done.set()
+            break
 
         src.frame_num += 1
 
@@ -296,7 +373,9 @@ def count_unique_people(
         tolerance: float = 0.005,
         sample_rate: int = 3, img_size: int = 640,
         show_window: bool = True, device: str = "cpu",
-        model_name: str = "yolo26n.pt") -> int:
+        model_name: str = "yolo26n.pt",
+        frame_queue: queue.Queue | None = None,
+        status_cb=None, stop_event: threading.Event | None = None) -> int:
 
     shared = _Shared()
     states: list[_Source] = []
@@ -335,12 +414,15 @@ def count_unique_people(
         for s in states:
             t = threading.Thread(target=_worker, daemon=True,
                                  args=(s, shared, tolerance, sample_rate,
-                                       img_size, show_window))
+                                       img_size, show_window, frame_queue,
+                                       stop_event))
             t.start()
             threads.append(t)
 
         last_print = 0.0
         while not shared.stop_event.is_set():
+            if stop_event is not None and stop_event.is_set():
+                break
             if all(s.done.is_set() for s in states):
                 break
 
@@ -359,6 +441,9 @@ def count_unique_people(
             if now - last_print >= 0.1:
                 last_print = now
                 _print_status(states, shared)
+                if status_cb is not None:
+                    with shared.people_lock:
+                        status_cb(len(shared.unique_people))
 
         shared.stop_event.set()
         for t in threads:
@@ -375,6 +460,10 @@ def count_unique_people(
         if show_window:
             cv2.destroyAllWindows()
     print()
+
+    if shared.error:
+        raise RuntimeError(f"Falha na contagem ({shared.error})")
+
     return len(shared.unique_people)
 
 

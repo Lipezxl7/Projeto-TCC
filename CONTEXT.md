@@ -1,7 +1,19 @@
 # CONTEXT.md
 
 Authoritative context file for this repository. Read this first.
-Source of truth order when anything conflicts: **`modulos/contador.py` > `main.py` > `CONTEXT.md` > `README.md`**.
+Source of truth order when anything conflicts: **`modulos/contador.py` > `app.py` > `CONTEXT.md` > `README.md`**.
+
+> **Streamlit frontend (2026-08 refactor):** `app.py` is now the user-facing
+> entry point (a single-file Streamlit app with two pages — "Contagem" and
+> "Resultado"). It imports from `modulos/` and reads/writes everything under
+> `arquivos/` (PDFs, vídeos, and the generated JSONs incl. `precos.json`).
+> The old `main.py` orchestrator was removed in favor of `app.py`. The CLI
+> modules (`python -m modulos.<name>`) remain supported.
+> `modulos/contador.py` gained optional streaming params (`frame_queue`,
+> `status_cb`, `stop_event`), an `openvino.runtime` shim for OpenVINO 2025+,
+> NaN/invalid box filtering (prevents the ByteTrack `LinAlgError`),
+> and worker error propagation (`_Shared.error` + `RuntimeError`) — all
+> backward compatible with the CLI.
 
 ---
 
