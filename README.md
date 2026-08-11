@@ -112,14 +112,16 @@ python main.py --skip-cardapio --skip-receitas --skip-producao \
 | `--model`            | string  | `yolo26x.pt`                        | Modelo YOLO (`yolo26n`→`s`→`m`→`l`→`x`) ou `.pt` customizado     |
 | `--device`           | string  | auto                                | `cuda` \| `mps` \| `intel:gpu` \| `intel:cpu` \| `cpu`          |
 | `--no-window`        | flag    | off                                 | Modo headless                                                    |
-| `--etapa`            | string  | obrigatório                         | `fund` (fundamental) ou `med` (médio/EJA)                       |
-| `--alunos`           | int     | obrigatório                         | Quantidade de alunos                                             |
-| `--data`             | string  | obrigatório                         | Data de referência no formato `DD-MM`                            |
+| `--etapa`            | string  | obrigatório¹                        | `fund` (fundamental) ou `med` (médio/EJA)                       |
+| `--alunos`           | int     | obrigatório¹                        | Quantidade de alunos                                             |
+| `--data`             | string  | obrigatório¹                        | Data de referência no formato `DD-MM`                            |
 | `--skip-producao`    | flag    | off                                 | Pula a planilha PBI                                              |
 | `--mapeamento`       | string  | `arquivos/mapeamento_manual.json`   | JSON com mapeamento manual prato→receita (opcional)             |
 | `--no-json`          | flag    | off                                 | Não salva JSONs das extrações                                    |
 | `--no-csv`           | flag    | off                                 | Não salva CSVs das extrações                                     |
 | `--output`           | string  | `arquivos/planilha.xlsx`            | Planilha de saída PBI                                            |
+
+> **Nota ¹:** `--etapa`, `--alunos` e `--data` são `required=True` no argparse e precisam sempre ser passados, mesmo em runs que pulam a etapa 4 (ex.: `--skip-producao`). Eles só são usados por `calcular_producao_pbi()`. Em runs só de contagem, passe valores placeholder (ex.: `--etapa fund --alunos 0 --data 01-01`).
 
 ---
 

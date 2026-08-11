@@ -34,8 +34,12 @@ Exemplos:
         --etapa med --alunos 200 --data 12-05
 
     # Contagem de pessoas apenas
+    # NB: --etapa/--alunos/--data sao required=True no argparse mas sao
+    #     usados apenas pela etapa 4 (producao). Para um run de contagem
+    #     pura, passe valores placeholder quaisquer.
     python main.py --skip-cardapio --skip-receitas --skip-producao \
-        --video arquivos/video1.mp4 --device cuda
+        --video arquivos/video1.mp4 --device cuda \
+        --etapa fund --alunos 0 --data 01-01
 """
 
 import argparse
