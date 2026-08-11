@@ -19,8 +19,8 @@ Telas (menu lateral):
 - **🎬 Contagem** — seleciona um vídeo da pasta `arquivos/`, roda YOLO + ByteTrack
   ao vivo (botões **Iniciar/Parar**) e estima o número de **alunos únicos**.
 - **📊 Resultado** — a partir da contagem (ou valor manual), do cardápio do dia e
-  das fichas técnicas, calcula produção, água e **gasto do dia** (custo de
-  ingredientes). Editor de preços e exportação CSV/Excel.
+  das fichas técnicas, calcula a produção do dia em **kg de alimento** e
+  **litros de água** (gasto do dia). Exportação CSV/Excel.
 
 ### Geração dos dados (na própria UI)
 
@@ -66,10 +66,9 @@ Projeto-TCC/
 │   ├── cardapio.py           # cardápio (PDF -> JSON)
 │   ├── receita.py            # receitas (PDF -> JSON)
 │   └── contador.py           # contagem de pessoas (YOLO + ByteTrack + HSV re-ID)
-├── arquivos/                 # PDFs, vídeos e JSONs gerados (+ precos.json)
+├── arquivos/                 # PDFs, vídeos e JSONs gerados
 │   ├── cardapio.pdf, receita.pdf, video.mp4, video2.mp4, i2v6ti.mp4
-│   ├── cardapio.json, receitas.json   (gerados sob demanda)
-│   └── precos.json                    (tabela de preços editável na UI)
+│   └── cardapio.json, receitas.json   (gerados sob demanda)
 ├── yolo26n.pt, yolo26x.pt ... yolo26n_openvino_model/   # modelos (gitignored)
 ├── requirements.txt
 ├── CONTEXT.md
@@ -116,11 +115,10 @@ Para cada prato do cardápio na data escolhida:
 2. Extrai `rendimento_g`, `porcao_*_g` (por segmento) e `agua` (ingrediente água).
 3. `fator = (porcao × alunos) / rendimento_base`
 4. **água (L)** = `(agua_base_g × fator) / 1000`
-5. **custo (R$)** = `Σ qtd_ingrediente_g × fator × preço(ingrediente) / 1000`
-   (preços em R$/kg, editáveis em `arquivos/precos.json`).
+5. **kg a produzir** = `(porcao × alunos) / 1000`
 
-Saída: tabela por prato + métricas (alunos, água total, gasto total) + botões
-CSV/Excel.
+Saída: tabela por prato + métricas (alunos, pratos, água total, kg total) +
+botões CSV/Excel.
 
 ---
 

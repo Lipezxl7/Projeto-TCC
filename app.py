@@ -5,11 +5,11 @@ Rodar com:
 
 Estrutura:
   modulos/   -> fontes de verdade (cardapio, receita, contador)
-  arquivos/  -> PDFs, vídeos e JSONs gerados (cardapio.json, receitas.json, precos.json)
+  arquivos/  -> PDFs, vídeos e JSONs gerados (cardapio.json, receitas.json)
 
 Telas (menu lateral):
   🎬 Contagem   -> vídeo + IA (YOLO/ByteTrack) contando alunos únicos
-  📊 Resultado  -> gasto do dia (cardápio + fichas técnicas + preços)
+  📊 Resultado  -> produção do dia em kg de alimento e litros de água
 """
 from __future__ import annotations
 
@@ -46,7 +46,6 @@ CARDAPIO_PDF = _caminho("cardapio.pdf")
 RECEITA_PDF = _caminho("receita.pdf")
 CARDAPIO_JSON = _caminho("cardapio.json")
 RECEITAS_JSON = _caminho("receitas.json")
-PRECOS_JSON = _caminho("precos.json")
 
 # ═══════════════════════════════════════════════════════════════════
 #  GERAÇÃO DE DADOS (modulos)
@@ -77,7 +76,7 @@ def gerar_receitas() -> None:
     receita.save_json(recipes, str(RECEITAS_JSON))
 
 # ═══════════════════════════════════════════════════════════════════
-#  DADOS: receitas, cardápio e preços
+#  DADOS: receitas e cardápio
 # ═══════════════════════════════════════════════════════════════════
 
 def _sem_acento(texto: str) -> str:
@@ -189,94 +188,37 @@ def pratos_do_dia(data) -> list[str]:
     return []
 
 
-@st.cache_data(show_spinner="Carregando preços...")
-def carregar_precos(_path: str) -> dict[str, float]:
-    try:
-        with open(_path, "r", encoding="utf-8") as f:
-            return {k: float(v) for k, v in json.load(f).items()}
-    except (FileNotFoundError, json.JSONDecodeError):
-        return {}
-
-
-def salvar_precos(precos: dict[str, float]) -> None:
-    with open(PRECOS_JSON, "w", encoding="utf-8") as f:
-        json.dump(precos, f, ensure_ascii=False, indent=2)
-
-
-def _migrar_precos() -> None:
-    """Move precos.json da raiz para arquivos/ (se só houver na raiz)."""
-    if PRECOS_JSON.exists():
-        return
-    raiz = RAIZ / "precos.json"
-    if raiz.exists():
-        try:
-            raiz.replace(PRECOS_JSON)
-            return
-        except OSError:
-            pass
-    #Plantar defaults de exemplo
-    if not PRECOS_JSON.exists():
-        salvar_precos({
-            "arroz": 6.50, "feijao": 8.00, "frango": 12.00,
-            "carne bovina": 25.00, "carne moida": 22.00, "carne suina": 18.00,
-            "oleo": 7.00, "sal": 2.00, "cebola": 5.00, "alho": 15.00,
-            "tomate": 6.00, "batata": 5.00, "mandioca": 4.00, "abobora": 4.00,
-            "macarrao": 5.00, "agua": 0.0, "ovo": 0.80, "milho": 4.00,
-            "couve": 4.00, "alface": 3.00, "repolho": 3.50, "beterraba": 5.00,
-            "abobrinha": 5.00, "banana": 5.00, "tangerina": 6.00, "abacaxi": 8.00,
-            "extrato de tomate": 10.00, "molho de tomate": 8.00,
-            "farinha de trigo": 5.00, "farinha de mandioca": 6.00,
-        })
-
-
-def preco_ingrediente(nome: str, precos: dict) -> float | None:
-    alvo = _sem_acento(nome).lower().strip()
-    melhor_chave, melhor_len = None, 0
-    for chave in precos:
-        c = _sem_acento(chave).lower().strip()
-        if c and c in alvo and len(c) > melhor_len:
-            melhor_chave, melhor_len = chave, len(c)
-    return precos[melhor_chave] if melhor_chave else None
-
-
 def _eh_agua(nome: str) -> bool:
     n = _sem_acento(nome).lower()
     return "agua" in n
 
 
 def calcular_dia(alunos: int, pratos: list[str], segmento: str,
-                 banco: dict, precos: dict) -> pd.DataFrame:
-    """Linhas: prato, receita, porção, fator, água (L), custo (R$), avisos."""
+                 banco: dict) -> pd.DataFrame:
+    """Linhas: prato, receita, porção, fator, água (L), kg a produzir, avisos."""
     campo = SEG_CAMPO.get(segmento, "porcao_em_g")
     linhas = []
     for nome in pratos:
         rec = buscar_receita(banco, nome)
         if rec is None:
             linhas.append({"Prato": nome, "Receita": "—", "Porção (g)": 0.0, "Fator": 0.0,
-                           "Água (L)": 0.0, "Custo (R$)": 0.0, "Avisos": "sem ficha técnica"})
+                           "Água (L)": 0.0, "kg a produzir": 0.0, "Avisos": "sem ficha técnica"})
             continue
 
         porcao = rec.get(campo) or 0.0
         rend = rec.get("rendimento_g") or 0.0
         fator = (porcao * alunos) / rend if porcao > 0 and rend > 0 else 0.0
+        kg_total = porcao * alunos / 1000.0
 
-        agua, custo, sem_preco = 0.0, 0.0, []
+        agua = 0.0
         for ing in rec.get("ingredientes", []):
             qtd = float(ing.get("qtd") or 0.0)
             if _eh_agua(ing["nome"]):
                 agua = qtd * fator / 1000.0
-                continue
-            preco = preco_ingrediente(ing["nome"], precos)
-            if preco is None:
-                if qtd > 0:
-                    sem_preco.append(ing["nome"])
-                continue
-            custo += qtd * fator * preco / 1000.0  # g -> kg
 
-        aviso = f"sem preço: {', '.join(sem_preco[:3])}" if sem_preco else ""
         linhas.append({"Prato": nome, "Receita": rec["nome"], "Porção (g)": porcao,
                        "Fator": round(fator, 2), "Água (L)": round(agua, 2),
-                       "Custo (R$)": round(custo, 2), "Avisos": aviso})
+                       "kg a produzir": round(kg_total, 2), "Avisos": ""})
 
     return pd.DataFrame(linhas)
 
@@ -386,22 +328,22 @@ def _listar_videos() -> list[str]:
 
 
 def tela_contagem() -> None:
-    st.title("🎬 Contagem de Alunos com IA")
+    st.title("Contagem alunos")
     st.caption("Detecção **YOLO** + **ByteTrack** + correspondência de aparência (HSV).")
 
     videos = _listar_videos()
 
     with st.sidebar:
-        st.header("⚙️ Contagem")
-        video = st.selectbox("🎥 Vídeo", videos if videos else ["—"])
-        modelo = st.selectbox("🤖 Modelo YOLO",
+        st.header(" Contagem")
+        video = st.selectbox(" Vídeo", videos if videos else ["—"])
+        modelo = st.selectbox(" Modelo YOLO",
                               ["yolo26n.pt", "yolo26x.pt", "yolo11x.pt",
                                "yolov8s.pt", "yolov8n.pt"])
-        tolerancia = st.slider("🎯 Tolerância", 0.001, 0.35, 0.005, 0.001,
+        tolerancia = st.slider(" Tolerância", 0.001, 0.35, 0.005, 0.001,
                                help="Menor = exige mais semelhança para contar como a mesma pessoa.")
-        sample_rate = st.slider("🔁 Sample rate", 1, 10, 1)
-        img_size = st.selectbox("🖼️ Resolução", [320, 480, 640, 768, 1024], index=2)
-        device = st.selectbox("🖥️ Hardware",
+        sample_rate = st.slider(" Sample rate", 1, 10, 1)
+        img_size = st.selectbox(" Resolução", [320, 480, 640, 768, 1024], index=2)
+        device = st.selectbox(" Hardware",
                               ["auto", "cpu", "intel:gpu", "intel:cpu", "cuda", "mps"],
                               help="'auto' escolhe o melhor disponível.")
 
@@ -457,16 +399,16 @@ def tela_contagem() -> None:
         st.metric("👥 Pessoas únicas (ao vivo)", eng.live_count)
         if eng.done and eng.final_count is not None:
             st.session_state["contagem_final"] = eng.final_count
-            st.success(f"✅ Contagem concluída: **{eng.final_count}** aluno(s).")
-            if st.button("📊 Ver o gasto do dia"):
+            st.success(f" Contagem concluída: **{eng.final_count}** aluno(s).")
+            if st.button(" Ver o gasto do dia"):
                 st.session_state["pagina"] = "Resultado"
                 st.rerun()
         elif not eng.running and not eng.has_pending() and not eng.done:
             st.info("Configure e clique em **▶️ Iniciar contagem**.")
 
     elif "contagem_final" in st.session_state:
-        st.metric("👥 Alunos (última contagem)", st.session_state["contagem_final"])
-        if st.button("📊 Ver o gasto do dia"):
+        st.metric(" Alunos (última contagem)", st.session_state["contagem_final"])
+        if st.button(" Ver o gasto do dia"):
             st.session_state["pagina"] = "Resultado"
             st.rerun()
 
@@ -475,17 +417,16 @@ def tela_contagem() -> None:
 # ═══════════════════════════════════════════════════════════════════
 
 def tela_resultado() -> None:
-    st.title("📊 Resultado do dia")
-    st.caption("Produção estimada e **gasto do dia** com base na contagem de alunos.")
-
-    _migrar_precos()
+    st.title(" Resultado do dia")
+    st.caption("Produção estimada do dia (kg de alimento e litros de água) "
+               "com base na contagem de alunos.")
 
     eng = _engine()
     if eng is not None and eng.done and eng.final_count is not None:
         st.session_state["contagem_final"] = eng.final_count
 
     # Geração automática dos dados (se os PDFs existirem e os JSONs não)
-    with st.expander("📂 Geração dos dados (PDFs)", expanded=not RECEITAS_JSON.exists()):
+    with st.expander(" Geração dos dados (PDFs)", expanded=not RECEITAS_JSON.exists()):
         faltando = []
         if not RECEITAS_JSON.exists():
             faltando.append("receitas.json")
@@ -507,13 +448,12 @@ def tela_resultado() -> None:
         return
 
     banco = carregar_receitas(str(RECEITAS_JSON))
-    precos = carregar_precos(str(PRECOS_JSON))
 
     default_alunos = st.session_state.get("contagem_final", 0)
     c_data, c_seg, c_alu = st.columns([2, 2, 1])
-    data_dia = c_data.date_input("📅 Data", value=date.today())
-    segmento = c_seg.selectbox("🏫 Segmento", SEGMENTOS)
-    alunos = c_alu.number_input("👥 Alunos", min_value=0,
+    data_dia = c_data.date_input(" Data", value=date.today())
+    segmento = c_seg.selectbox(" Segmento", SEGMENTOS)
+    alunos = c_alu.number_input(" Alunos", min_value=0,
                                 value=int(default_alunos), step=1)
     if default_alunos:
         st.caption(f"Valor da última contagem: **{default_alunos}** (editável acima).")
@@ -521,32 +461,25 @@ def tela_resultado() -> None:
     pratos_auto = pratos_do_dia(data_dia)
     opcoes = list(dict.fromkeys(pratos_auto + sorted(r["nome"] for r in banco.values())))
     pratos = st.multiselect(
-        "🍽️ Pratos do dia (automático pelo cardápio, editável)",
+        "Pratos do dia (automático pelo cardápio, editável)",
         options=opcoes, default=pratos_auto)
 
     if not pratos:
         st.warning("Selecione ao menos um prato.")
         return
 
-    df = calcular_dia(alunos, pratos, segmento, banco, precos)
+    df = calcular_dia(alunos, pratos, segmento, banco)
     agua_total = df["Água (L)"].sum()
-    custo_total = df["Custo (R$)"].sum()
+    kg_total = df["kg a produzir"].sum()
 
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("👥 Alunos", f"{alunos}")
     m2.metric("🍽️ Pratos", f"{len(pratos)}")
     m3.metric("💧 Água total", f"{agua_total:.2f} L")
-    m4.metric("💰 Gasto do dia", f"R$ {custo_total:.2f}")
+    m4.metric("🥣 Gasto do dia", f"{kg_total:.2f} kg")
 
     st.dataframe(df, width="stretch", hide_index=True)
 
-    sem_preco = set()
-    for aviso in df["Avisos"].tolist():
-        if aviso.startswith("sem preço:"):
-            sem_preco.update(a.strip() for a in aviso.replace("sem preço:", "").split(","))
-    if sem_preco:
-        st.warning(f"Ingredientes sem preço cadastrado (não somam no custo): "
-                   f"{', '.join(sorted(sem_preco))}. Complete na seção de preços abaixo.")
     if (df["Avisos"] == "sem ficha técnica").any():
         st.warning("Alguns pratos não têm ficha técnica no receitas.json. "
                    "Ajuste a seleção ou gere novamente as receitas.")
@@ -563,33 +496,17 @@ def tela_resultado() -> None:
                           file_name=f"{fname}.xlsx", width="stretch",
                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-    # Editor de preços
-    st.divider()
-    with st.expander("💲 Tabela de preços (R$/kg por ingrediente)"):
-        df_precos = pd.DataFrame(
-            [{"Ingrediente": k, "Preço (R$/kg)": v} for k, v in precos.items()])
-        editado = st.data_editor(df_precos, num_rows="dynamic",
-                                 width="stretch", hide_index=True,
-                                 key="editor_precos")
-        if st.button("💾 Salvar preços", type="primary"):
-            novos = {str(r["Ingrediente"]).strip(): float(r["Preço (R$/kg)"])
-                     for _, r in editado.iterrows() if str(r["Ingrediente"]).strip()}
-            salvar_precos(novos)
-            carregar_precos.clear()
-            st.success("Preços salvos! Recalcule acima para atualizar o custo.")
-            st.rerun()
-
 # ═══════════════════════════════════════════════════════════════════
 #  APP
 # ═══════════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="TCC — Refeitório", page_icon="🍽️", layout="wide")
+st.set_page_config(page_title="TCC — Refeitório", page_icon="", layout="wide")
 
 if "pagina" not in st.session_state:
     st.session_state["pagina"] = "Contagem"
 
 with st.sidebar:
-    st.header("🍽️ Refeitório — TCC")
+    st.header(" Refeitório — TCC")
     pagina = st.radio("Navegação", ["Contagem", "Resultado"],
                       index=0 if st.session_state["pagina"] == "Contagem" else 1,
                       key="nav")
@@ -600,4 +517,10 @@ if pagina == "Contagem":
 else:
     tela_resultado()
 
-st.sidebar.caption("— visão computacional + gestão de produção —")
+
+with st.sidebar:
+    
+    st.title("Visão computacional")
+    st.markdown("---")
+    
+
