@@ -292,7 +292,7 @@ Defined in `parse_args()` (`main.py:360`). Stage-skip flags let you re-use cache
 | `--device` | str | auto | `cuda` \| `mps` \| `intel:gpu` \| `intel:cpu` \| `cpu` |
 | `--no-window` | flag | off | Modo headless |
 | `--etapa` | str | `None` | `fund` (fundamental) ou `med` (médio/EJA). **Obrigatório a menos que `--skip-producao`** |
-| `--alunos` | int | `None` | Quantidade de alunos. **Obrigatório a menos que `--skip-producao`**; deve ser > 0 |
+| `--alunos` | int | `None` | Quantidade de alunos. **Obrigatório a menos que `--skip-producao`**; se omitido e o contador rodar (i.e. `--skip-contador` ausente), é preenchido automaticamente com `contagem.pessoas_unicas`. Deve ser > 0 |
 | `--data` | str | `None` | Data no formato `DD-MM`. **Obrigatório a menos que `--skip-producao`** |
 | `--skip-producao` | flag | off | Pula a planilha PBI |
 | `--mapeamento` | str | `arquivos/mapeamento_manual.json` | JSON com mapeamento manual prato→receita (opcional) |

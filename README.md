@@ -113,7 +113,7 @@ python main.py --skip-cardapio --skip-receitas --skip-producao \
 | `--device`           | string  | auto                                | `cuda` \| `mps` \| `intel:gpu` \| `intel:cpu` \| `cpu`          |
 | `--no-window`        | flag    | off                                 | Modo headless                                                    |
 | `--etapa`            | string  | obrigatório (a menos que `--skip-producao`) | `fund` (fundamental) ou `med` (médio/EJA)                       |
-| `--alunos`           | int     | obrigatório (a menos que `--skip-producao`) | Quantidade de alunos; deve ser > 0                                |
+| `--alunos`           | int     | obrigatório (a menos que `--skip-producao`) | Quantidade de alunos; se omitido e o contador rodar, é preenchido automaticamente pela contagem; deve ser > 0 |
 | `--data`             | string  | obrigatório (a menos que `--skip-producao`) | Data de referência no formato `DD-MM`                            |
 | `--skip-producao`    | flag    | off                                 | Pula a planilha PBI                                              |
 | `--mapeamento`       | string  | `arquivos/mapeamento_manual.json`   | JSON com mapeamento manual prato→receita (opcional)             |

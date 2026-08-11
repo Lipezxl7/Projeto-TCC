@@ -384,8 +384,9 @@ def parse_args():
                    help="Etapa do dia: fund (fundamental) ou med (medio). "
                         "Obrigatório a menos que --skip-producao seja usado.")
     p.add_argument("--alunos", type=int, default=None,
-                   help="Quantidade de alunos presentes. "
-                        "Obrigatório a menos que --skip-producao seja usado.")
+                   help="Quantidade de alunos presentes. Obrigatório a menos que "
+                        "--skip-producao seja usado, OU omitido quando o contador roda "
+                        "(nesse caso o resultado da contagem preenche --alunos automaticamente).")
     p.add_argument("--data", type=str, default=None,
                    help="Data da produção no formato DD-MM (ex.: 12-05). "
                         "Obrigatório a menos que --skip-producao seja usado.")
@@ -402,13 +403,15 @@ def parse_args():
         faltando = []
         if args.etapa is None:
             faltando.append("--etapa")
-        if args.alunos is None:
+        # --alunos pode ser preenchido automaticamente pela contagem
+        # quando o contador roda; so e obrigatorio aqui se --skip-contador tambem estiver setado.
+        if args.alunos is None and args.skip_contador:
             faltando.append("--alunos")
         if args.data is None:
             faltando.append("--data")
         if faltando:
             p.error(f"argumentos obrigatórios ausentes (ou use --skip-producao): {', '.join(faltando)}")
-        if args.alunos <= 0:
+        if args.alunos is not None and args.alunos <= 0:
             p.error("--alunos deve ser maior que zero")
 
     return args
@@ -435,6 +438,16 @@ def main():
             sample_rate=args.sample_rate, img_size=args.img_size, device=args.device,
             model_name=args.model, show_window=not args.no_window,
         )
+
+    # Auto-preenche --alunos a partir da contagem quando o contador rodou e o
+    # usuario nao passou --alunos explicitamente.
+    if not args.skip_producao and args.alunos is None and not args.skip_contador:
+        args.alunos = contagem.get("pessoas_unicas", 0)
+        print(f"  alunos preenchido automaticamente pela contagem: {args.alunos}")
+        if args.alunos <= 0:
+            p_error_msg = ("contagem retornou 0 pessoas; nada a produzir. "
+                           "use --alunos para passar o valor manualmente.")
+            raise SystemExit(p_error_msg)
 
     if not args.skip_producao:
         print("\n=== ETAPA 4/4: Calculo de Producao PBI ===")
