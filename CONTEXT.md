@@ -291,16 +291,14 @@ Defined in `parse_args()` (`main.py:360`). Stage-skip flags let you re-use cache
 | `--model` | str | `yolo26x.pt` | Modelo YOLO (`yolo26n`→`s`→`m`→`l`→`x`) |
 | `--device` | str | auto | `cuda` \| `mps` \| `intel:gpu` \| `intel:cpu` \| `cpu` |
 | `--no-window` | flag | off | Modo headless |
-| `--etapa` | str | **obrigatório**¹ | `fund` (fundamental) ou `med` (médio/EJA) |
-| `--alunos` | int | **obrigatório**¹ | Quantidade de alunos |
-| `--data` | str | **obrigatório**¹ | Data no formato `DD-MM` |
+| `--etapa` | str | `None` | `fund` (fundamental) ou `med` (médio/EJA). **Obrigatório a menos que `--skip-producao`** |
+| `--alunos` | int | `None` | Quantidade de alunos. **Obrigatório a menos que `--skip-producao`**; deve ser > 0 |
+| `--data` | str | `None` | Data no formato `DD-MM`. **Obrigatório a menos que `--skip-producao`** |
 | `--skip-producao` | flag | off | Pula a planilha PBI |
 | `--mapeamento` | str | `arquivos/mapeamento_manual.json` | JSON com mapeamento manual prato→receita (opcional) |
 | `--no-json` | flag | off | Não salva JSONs das extrações |
 | `--no-csv` | flag | off | Não salva CSVs das extrações |
 | `--output` | str | `arquivos/planilha.xlsx` | Planilha de saída PBI |
-
-¹ `--etapa`, `--alunos` e `--data` são `required=True` no argparse e sempre precisam ser passados, mesmo em runs que pulam a etapa 4 (ex.: `--skip-producao`). São usados apenas por `calcular_producao_pbi()` — em runs só de contagem passe valores placeholder (ex.: `--etapa fund --alunos 0 --data 01-01`). Para torná-los condicionais, valide em `main()` ao invés de usar `required=True`.
 
 ### `modulos/contador.py` (standalone)
 Defined in `NumerarPessoas()` (`modulos/contador.py:381`). `video` (positional, `nargs="*"`) and `--webcam` (`action="append"`, `nargs="?"`, `const=0`) **can be freely mixed** — they are **NOT** mutually exclusive. At least one source is required.

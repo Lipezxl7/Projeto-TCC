@@ -34,12 +34,8 @@ Exemplos:
         --etapa med --alunos 200 --data 12-05
 
     # Contagem de pessoas apenas
-    # NB: --etapa/--alunos/--data sao required=True no argparse mas sao
-    #     usados apenas pela etapa 4 (producao). Para um run de contagem
-    #     pura, passe valores placeholder quaisquer.
     python main.py --skip-cardapio --skip-receitas --skip-producao \
-        --video arquivos/video1.mp4 --device cuda \
-        --etapa fund --alunos 0 --data 01-01
+        --video arquivos/video1.mp4 --device cuda
 """
 
 import argparse
@@ -384,12 +380,15 @@ def parse_args():
     p.add_argument("--device", default=None)
     p.add_argument("--no-window", action="store_true")
 
-    p.add_argument("--etapa", choices=["fund", "med"], required=True,
-                   help="Etapa do dia: fund (fundamental) ou med (medio)")
-    p.add_argument("--alunos", type=int, required=True,
-                   help="Quantidade de alunos presentes")
-    p.add_argument("--data", type=str, required=True,
-                   help="Data da produção no formato DD-MM (ex.: 12-05)")
+    p.add_argument("--etapa", choices=["fund", "med"], default=None,
+                   help="Etapa do dia: fund (fundamental) ou med (medio). "
+                        "Obrigatório a menos que --skip-producao seja usado.")
+    p.add_argument("--alunos", type=int, default=None,
+                   help="Quantidade de alunos presentes. "
+                        "Obrigatório a menos que --skip-producao seja usado.")
+    p.add_argument("--data", type=str, default=None,
+                   help="Data da produção no formato DD-MM (ex.: 12-05). "
+                        "Obrigatório a menos que --skip-producao seja usado.")
     p.add_argument("--skip-producao", action="store_true")
     p.add_argument("--mapeamento", default="arquivos/mapeamento_manual.json")
 
@@ -397,7 +396,22 @@ def parse_args():
     p.add_argument("--no-csv", action="store_true")
     p.add_argument("--output", default="arquivos/planilha.xlsx")
 
-    return p.parse_args()
+    args = p.parse_args()
+
+    if not args.skip_producao:
+        faltando = []
+        if args.etapa is None:
+            faltando.append("--etapa")
+        if args.alunos is None:
+            faltando.append("--alunos")
+        if args.data is None:
+            faltando.append("--data")
+        if faltando:
+            p.error(f"argumentos obrigatórios ausentes (ou use --skip-producao): {', '.join(faltando)}")
+        if args.alunos <= 0:
+            p.error("--alunos deve ser maior que zero")
+
+    return args
 
 
 def main():
