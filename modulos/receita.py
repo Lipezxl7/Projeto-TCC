@@ -3,6 +3,7 @@ import pdfplumber
 import json
 import re
 import csv
+import argparse
 import sys
 from pathlib import Path
 
@@ -77,47 +78,6 @@ def parse_footer_row(row_text, footer):
             me = re.search(r"Medida caseira EM[^:]*:\s*(.+?)$", row_text, re.IGNORECASE)
             if me and clean_text(me.group(1)):
                 footer["medida_caseira_em_eja"] = clean_text(me.group(1))
-
-
-def parse_rendimento_gramas(rendimento_text):
-    """
-    Converte o texto de 'rendimento' (ex: '12000 g', '12 kg', '12 litros')
-    para um valor numerico em gramas. Retorna None se nao for possivel
-    converter (ex: rendimento informado em 'alunos', sem peso).
-    """
-    if not rendimento_text:
-        return None
-    texto = clean_text(rendimento_text).lower()
-    m = re.search(r"([\d.,]+)\s*(kg|g|litros|litro|l)\b", texto)
-    if not m:
-        return None
-    num_str = m.group(1).replace(".", "").replace(",", ".")
-    try:
-        valor = float(num_str)
-    except (ValueError, TypeError):
-        return None
-    unidade = m.group(2)
-    if unidade == "kg":
-        return valor * 1000
-    if unidade in ("litros", "litro", "l"):
-        return valor * 1000
-    return valor
-
-
-def obter_quantidade_ingrediente(recipe, nome_busca):
-    """
-    Procura um ingrediente pelo nome (case-insensitive, sem acento) na
-    lista de ingredientes da receita e retorna sua quantidade (g/ml).
-    Retorna None se nao encontrar.
-    """
-    alvo = clean_text(nome_busca).upper()
-    alvo = alvo.replace("Á", "A").replace("Ã", "A").replace("Â", "A")
-    for ing in recipe.get("ingredientes", []):
-        nome = clean_text(ing.get("ingrediente", "")).upper()
-        nome = nome.replace("Á", "A").replace("Ã", "A").replace("Â", "A")
-        if alvo in nome:
-            return ing.get("quantidade_g_ml")
-    return None
 
 
 def extract_from_table(table):
@@ -258,7 +218,21 @@ def save_csv(recipes, output_path):
 
 
 def main():
-    pdf_path = Path(__file__).parent / "receita.pdf"
+    parser = argparse.ArgumentParser(
+        description="Extrai as receitas do PDF para JSON e CSV.")
+    parser.add_argument(
+        "caminho_pdf", nargs="?", default=None,
+        help="Caminho para o PDF das receitas (padrão: arquivos/receita.pdf)")
+    args = parser.parse_args()
+
+    raiz = Path(__file__).resolve().parent.parent  # raiz do repositório
+    if args.caminho_pdf:
+        pdf_path = Path(args.caminho_pdf)
+        json_path = pdf_path.with_suffix(".json")
+    else:
+        pdf_path = raiz / "arquivos" / "receita.pdf"
+        json_path = raiz / "arquivos" / "receitas.json"  # nome que o app.py lê
+    csv_path = json_path.with_suffix(".csv")
 
     if not pdf_path.exists():
         print(f"File not found: {pdf_path}")
@@ -268,9 +242,8 @@ def main():
     recipes = extract_recipes(str(pdf_path))
     print(f"Found {len(recipes)} recipes")
 
-    output_dir = Path(__file__).parent
-    save_json(recipes, output_dir / "receitas.json")
-    save_csv(recipes, output_dir / "receitas.csv")
+    save_json(recipes, json_path)
+    save_csv(recipes, csv_path)
     print("Done!")
 
 

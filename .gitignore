@@ -3,6 +3,7 @@
 venv/
 yolo*/
 __pycache__/
+.pytest_cache/
 *.json
 *.csv
 

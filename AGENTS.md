@@ -7,31 +7,37 @@ appearance re-ID), and computes daily food production (kg) and water use (L).
 ## Commands
 
 ```bash
-pip install -r requirements.txt   # torch comes transitively via ultralytics;
-                                   # for GPU-specific wheels see the README table
-streamlit run app.py               # main entry point (pages: Contagem, Resultado)
+pip install -r requirements.txt        # torch comes transitively via ultralytics;
+                                        # for GPU-specific wheels see the README table
+pip install -r requirements-dev.txt     # pytest (dev only)
+streamlit run app.py                    # main entry point (pages: Contagem, Resultado)
+pytest                                  # light suite — needs pdfplumber/pandas only, NO torch
 
 # Each module also runs standalone:
-python -m modulos.contador arquivos/video.mp4 --no-window   # headless count
-python -m modulos.cardapio arquivos/cardapio.pdf             # prompts for month on stdin
-python -m modulos.receita                                     # broken by default — see Gotchas
+python -m modulos.contador arquivos/video.mp4 --no-window    # headless count
+python -m modulos.cardapio arquivos/cardapio.pdf --mes jun   # --mes omitted → prompts on stdin
+python -m modulos.receita                                   # uses arquivos/receita.pdf by default
 ```
 
-- **No tests, no linter, no formatter, no CI.** Do not invent `pytest`/`ruff`/`npm`
-  commands. Verify changes by running the affected module against the committed
-  fixtures in `arquivos/` (`video.mp4`, `video2.mp4`, `cardapio.pdf`, `receita.pdf`);
-  use `--no-window` for headless counting. First run auto-downloads `yolo26n.pt`.
+- **No linter, no formatter, no CI.** Tests cover the pure calculation logic
+  (`modulos/calculo.py`) and both PDF extractors against the committed fixtures.
+  Vision-stage changes must be verified by running `modulos.contador` against
+  `arquivos/video.mp4` / `video2.mp4` with `--no-window` (first run auto-downloads
+  `yolo26n.pt`; requires torch, so it can't run everywhere).
 - **Python 3.11–3.13.** 3.14 is NOT recommended (no torch/ultralytics/openvino wheels
   yet). The code itself only needs 3.10+ syntax (`match/case`, `X | None`).
 
 ## Architecture
 
-- `app.py` — single-file Streamlit app, the only user-facing entry point. The old
-  `main.py` orchestrator was removed in the Streamlit refactor.
-- `modulos/` — source of truth, no UI imports (never import `app` from here; `app.py`
-  imports `from modulos import ...`). Real package (`__init__.py`):
-  `contador.py` (YOLO26 + ByteTrack + HSV re-ID, one worker thread per source),
-  `cardapio.py` (menu PDF → JSON/CSV), `receita.py` (recipes PDF → JSON/CSV).
+- `app.py` — single-file Streamlit app, the only user-facing entry point. Owns
+  paths (`arquivos/`), caching, and user feedback; no business logic.
+- `modulos/` — source of truth, no UI imports (never import `app` from here; and
+  `calculo.py` must stay importable without streamlit — the tests import it
+  directly). Real package (`__init__.py`):
+  `calculo.py` (pure Resultado logic: pt-BR quantity parsing, date normalization,
+  recipe matching, day calculation), `contador.py` (YOLO26 + ByteTrack + HSV
+  re-ID, one worker thread per source), `cardapio.py` (menu PDF → JSON/CSV),
+  `receita.py` (recipes PDF → JSON/CSV).
 - `arquivos/` — committed PDFs/videos (fixtures) plus generated JSONs. The app's
   Contagem page auto-lists videos (`.mp4/.avi/.mov/.mkv`) from this folder.
 - Generated artifacts are gitignored (`*.json`, `*.csv`, `*.pt`, `yolo*/`, `venv/`)
@@ -39,32 +45,42 @@ python -m modulos.receita                                     # broken by defaul
 
 ## Gotchas
 
-- `python -m modulos.receita` looks for `modulos/receita.pdf` (`Path(__file__).parent`)
-  and writes `receitas.json/csv` into `modulos/` — it exits 1 with the committed layout.
-  The supported path is the app's "Extrair receitas do PDF" button or calling
-  `receita.extract_recipes("arquivos/receita.pdf")` programmatically. Don't "fix" the
-  standalone `main()` without preserving this.
-- `cardapio.executar_extracao` prompts via `input()` when `mes` is `None` — the
-  standalone CLI has no `--mes` flag. In headless runs pipe the month in
-  (`echo jun | python -m modulos.cardapio ...`) or pass `mes=` programmatically.
-- Extraction results are cached: `gerar_cardapio`/`gerar_receitas` in `app.py` are
-  no-ops while the JSON exists, and `carregar_receitas` is `@st.cache_data` with the
-  path arg excluded from the cache key (leading underscore) — delete `arquivos/*.json`
-  and restart the app to force re-extraction.
+- A requested device that is unavailable makes `detect_device()` print a ⚠️ warning
+  and fall back to auto — and the Streamlit UI shows `st.warning` with the hardware
+  actually in use. If `intel:gpu` keeps falling back on Linux/Intel, the OS is
+  missing the Intel compute runtime (Level-Zero/OpenCL driver — `intel-compute-runtime`
+  on Arch, `intel-opencl-icd` on Debian/Ubuntu); OpenVINO can only use devices it
+  can see (`ov.Core().available_devices`).
+- `modulos.receita`'s CLI resolves its default PDF **relative to the repo root**
+  (`arquivos/receita.pdf`) — run it from the repo root or pass a path. It writes
+  `arquivos/receitas.json` + `receitas.csv` (the exact names the app reads).
+- `cardapio.executar_extracao` prompts via `input()` when `mes` is `None` and
+  **raises** on read errors — the CLI catches and exits 1, the app shows
+  `st.error`. Pipe the month in for headless runs (`echo jun | ...`) or use `--mes`.
+- The app's extraction buttons **always regenerate** (overwrite the JSONs) and
+  show success/error feedback. `carregar_receitas` in `app.py` is the
+  `@st.cache_data` wrapper — it is `.clear()`ed after regenerating, so don't add
+  "JSON exists → skip" no-ops back onto the button path.
 - `app.py` imports `modulos.contador` lazily (`_get_contador()`) because
   torch/ultralytics are heavy — keep that import inside functions.
 - Streamlit counting runs in a daemon thread (`CounterEngine`): frames flow through
   `queue.Queue(maxsize=1)` (a full queue drops frames — intentional), `status_cb`
   feeds the live count, `stop_event` stops the run. The UI re-renders in ~4s slices
   via `st.rerun()` so buttons stay clickable.
+- `calcular_dia`'s DataFrame column names (`Prato`, `Receita`, `Porção (g)`,
+  `Fator`, `Água (L)`, `kg a produzir`, `Avisos`) are a UI contract — the metrics
+  table and CSV/Excel export reference them by name.
 
 ## contador.py invariants (do not break)
 
-- **OpenVINO**: for `openvino:*` devices, `load_model()` returns `(model, None)` and
-  that `None` is passed to `model.track()` on purpose — never forward the OpenVINO
-  device string to `track()` (ultralytics' `select_device()` reads `"GPU"` as CUDA and
-  raises `Invalid CUDA device`). Keep `_garantir_openvino_runtime()`, which shims the
-  `openvino.runtime` alias removed in OpenVINO 2025+.
+- **OpenVINO**: for `openvino:*` devices, `load_model()` returns
+  `(model, "intel:gpu" | "intel:cpu")` — ultralytics' *native* Intel device string
+  (needs `ultralytics>=8.4`), which `select_device()` passes through untouched and
+  the OpenVINO backend maps to the real device (warning + AUTO/CPU fallback if
+  unavailable, torch pinned to CPU). Never pass raw OpenVINO names (`"GPU"`/`"CPU"`)
+  to `track()` — those DO crash `select_device()` with `Invalid CUDA device`. Keep
+  `_garantir_openvino_runtime()`, which shims the `openvino.runtime` alias removed
+  in OpenVINO 2025+.
 - **One YOLO model instance per source** — required for independent ByteTrack state
   (`persist=True`). Never share a model across sources.
 - **`shared.people_lock` guards the match-or-append person-registry block** — it must
@@ -90,7 +106,6 @@ python -m modulos.receita                                     # broken by defaul
 
 ## Docs
 
-`CONTEXT.md` is the deep reference (function maps, CLI tables, threading state) but is
-**partially stale**: it still documents the removed `main.py` and claims Python 3.14+ is
-mandatory. When docs conflict, trust the code — order: `modulos/contador.py` > `app.py`
-> `CONTEXT.md` > `README.md`. `README.md` matches the current Streamlit app.
+`CONTEXT.md` is the deep reference (architecture tables, contador internals, CLI
+tables) and is current. When docs conflict, trust the code — order:
+`modulos/` > `app.py` > `CONTEXT.md` > `README.md`.

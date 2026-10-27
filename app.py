@@ -4,7 +4,7 @@ Rodar com:
     streamlit run app.py
 
 Estrutura:
-  modulos/   -> fontes de verdade (cardapio, receita, contador)
+  modulos/   -> fontes de verdade (calculo, cardapio, receita, contador)
   arquivos/  -> PDFs, vídeos e JSONs gerados (cardapio.json, receitas.json)
 
 Telas (menu lateral):
@@ -14,25 +14,18 @@ Telas (menu lateral):
 from __future__ import annotations
 
 import io
-import json
 import queue
-import re
 import threading
 import time
-import unicodedata
 from datetime import date
 from pathlib import Path
 
-import pandas as pd
 import streamlit as st
+
+from modulos import calculo
 
 RAIZ = Path(__file__).resolve().parent
 ARQUIVOS = RAIZ / "arquivos"
-SEGMENTOS = ["Fundamental", "Ensino Médio"]
-SEG_CAMPO = {"Fundamental": "porcao_fund_g", "Ensino Médio": "porcao_em_g"}
-MESES = {m: i + 1 for i, m in enumerate(
-    ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"])}
-MESES_NOMES = list(MESES.keys())
 
 # ═══════════════════════════════════════════════════════════════════
 #  CAMINHOS
@@ -51,182 +44,49 @@ RECEITAS_JSON = _caminho("receitas.json")
 #  GERAÇÃO DE DADOS (modulos)
 # ═══════════════════════════════════════════════════════════════════
 
-def gerar_cardapio(mes: str) -> None:
-    """Extrai o cardápio do PDF (se ausente) usando modulos.cardapio."""
-    if CARDAPIO_JSON.exists():
-        return
+def gerar_cardapio(mes: str) -> int:
+    """Extrai o cardápio do PDF usando modulos.cardapio.
+
+    Sobrescreve o cardapio.json existente. Lança exceção em falha (a UI mostra).
+    """
     if not CARDAPIO_PDF.exists():
-        st.error(f"PDF do cardápio não encontrado: {CARDAPIO_PDF}")
-        return
+        raise FileNotFoundError(f"PDF do cardápio não encontrado: {CARDAPIO_PDF}")
     from modulos import cardapio
-    cardapio.executar_extracao(
+    dados = cardapio.executar_extracao(
         str(CARDAPIO_PDF), str(CARDAPIO_JSON), mes=mes,
         salvar_json=True, salvar_csv=False)
+    return len(dados)
 
 
-def gerar_receitas() -> None:
-    """Extrai as receitas do PDF (se ausente) usando modulos.receita."""
-    if RECEITAS_JSON.exists():
-        return
+def gerar_receitas() -> int:
+    """Extrai as receitas do PDF usando modulos.receita.
+
+    Sobrescreve o receitas.json existente. Lança exceção em falha (a UI mostra).
+    """
     if not RECEITA_PDF.exists():
-        st.error(f"PDF das receitas não encontrado: {RECEITA_PDF}")
-        return
+        raise FileNotFoundError(f"PDF das receitas não encontrado: {RECEITA_PDF}")
     from modulos import receita
     recipes = receita.extract_recipes(str(RECEITA_PDF))
     receita.save_json(recipes, str(RECEITAS_JSON))
-
-# ═══════════════════════════════════════════════════════════════════
-#  DADOS: receitas e cardápio
-# ═══════════════════════════════════════════════════════════════════
-
-def _sem_acento(texto: str) -> str:
-    texto = unicodedata.normalize("NFKD", texto or "")
-    return "".join(c for c in texto if not unicodedata.combining(c))
-
-
-def _slug(texto: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", _sem_acento(texto).lower())
-
-
-def _parse_gramas(texto) -> float:
-    """'12kg' -> 12000 | '50g (120g cozido)' -> 120 (prefere o parêntese)."""
-    if texto is None:
-        return 0.0
-    if isinstance(texto, (int, float)):
-        return float(texto)
-    s = str(texto).lower()
-    m = re.search(r"\((\d[\d.,]*)\s*(kg|g|gramas|l|litros|ml)?", s) or \
-        re.search(r"(\d[\d.,]*)\s*(kg|g|gramas|l|litros|ml)?", s)
-    if not m:
-        return 0.0
-    try:
-        valor = float(m.group(1).replace(".", "").replace(",", "."))
-    except ValueError:
-        return 0.0
-    if (m.group(2) or "").strip() in ("kg", "l", "litros"):
-        valor *= 1000.0
-    return valor
+    return len(recipes)
 
 
 @st.cache_data(show_spinner="Carregando fichas técnicas...")
-def carregar_receitas(_path: str) -> dict[str, dict]:
-    with open(_path, "r", encoding="utf-8") as f:
-        brutas = json.load(f)
-    banco = {}
-    for r in brutas:
-        ings = []
-        for ing in r.get("ingredientes", []):
-            qtd = ing.get("quantidade_g_ml")
-            if qtd is None:
-                qtd = ing.get("peso_base_g")
-            ings.append({
-                "nome": ing.get("ingrediente") or ing.get("nome") or "",
-                "qtd": float(qtd) if isinstance(qtd, (int, float)) else _parse_gramas(qtd),
-            })
-        chave = _slug(r.get("nome", ""))
-        if chave:
-            banco[chave] = {
-                "nome": r.get("nome", ""),
-                "rendimento_g": _parse_gramas(r.get("rendimento", "")),
-                "porcao_fund_g": _parse_gramas(r.get("porcao_fund", "")),
-                "porcao_em_g": _parse_gramas(r.get("porcao_em_eja", "")),
-                "ingredientes": ings,
-            }
-    return banco
+def carregar_receitas(caminho: str) -> dict[str, dict]:
+    return calculo.carregar_receitas(caminho)
 
-
-STOP = {"de", "do", "da", "com", "ao", "a", "e", "em", "no", "na", "the"}
-
-
-def _tokens(texto: str) -> set[str]:
-    return {t for t in re.split(r"[^a-z0-9]+", _sem_acento(texto).lower()) if t and t not in STOP}
-
-
-def buscar_receita(banco: dict, prato: str) -> dict | None:
-    """Match exato por slug ou maior sobreposição de tokens (>= 50%)."""
-    slug = _slug(prato)
-    if slug in banco:
-        return banco[slug]
-    toks = _tokens(prato)
-    melhor, melhor_score = None, 0.0
-    for rec in banco.values():
-        inter = len(toks & _tokens(rec["nome"]))
-        if inter:
-            score = inter / max(len(toks), 1)
-            if score > melhor_score:
-                melhor, melhor_score = rec, score
-    return melhor if melhor_score >= 0.5 else None
-
-
-def normalizar_data(valor) -> str:
-    """Qualquer data -> chave 'dd/mm' do cardápio."""
-    if isinstance(valor, date):
-        return valor.strftime("%d/%m")
-    s = str(valor).strip()
-    m = re.match(r"(\d{4})[-/](\d{1,2})[-/](\d{1,2})", s)
-    if m:
-        return f"{int(m.group(3)):02d}/{int(m.group(2)):02d}"
-    m = re.match(r"(\d{1,2})[/-](\d{1,2})", s)
-    if m:
-        return f"{int(m.group(1)):02d}/{int(m.group(2)):02d}"
-    m = re.match(r"(\d{1,2})/([a-zç]+)", s, re.IGNORECASE)
-    if m and m.group(2).lower().rstrip(".") in MESES:
-        return f"{int(m.group(1)):02d}/{MESES[m.group(2).lower().rstrip('.')]:02d}"
-    return ""
-
-
-def pratos_do_dia(data) -> list[str]:
-    try:
-        with open(CARDAPIO_JSON, "r", encoding="utf-8") as f:
-            dados = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
-        return []
-    chave = normalizar_data(data)
-    for d in dados:
-        if normalizar_data(d.get("data", "")) == chave:
-            return [p for p in d.get("pratos", []) if p and "REFEIÇÃO" not in p.upper()]
-    return []
-
-
-def _eh_agua(nome: str) -> bool:
-    n = _sem_acento(nome).lower()
-    return "agua" in n
-
-
-def calcular_dia(alunos: int, pratos: list[str], segmento: str,
-                 banco: dict) -> pd.DataFrame:
-    """Linhas: prato, receita, porção, fator, água (L), kg a produzir, avisos."""
-    campo = SEG_CAMPO.get(segmento, "porcao_em_g")
-    linhas = []
-    for nome in pratos:
-        rec = buscar_receita(banco, nome)
-        if rec is None:
-            linhas.append({"Prato": nome, "Receita": "—", "Porção (g)": 0.0, "Fator": 0.0,
-                           "Água (L)": 0.0, "kg a produzir": 0.0, "Avisos": "sem ficha técnica"})
-            continue
-
-        porcao = rec.get(campo) or 0.0
-        rend = rec.get("rendimento_g") or 0.0
-        fator = (porcao * alunos) / rend if porcao > 0 and rend > 0 else 0.0
-        kg_total = porcao * alunos / 1000.0
-
-        agua = 0.0
-        for ing in rec.get("ingredientes", []):
-            qtd = float(ing.get("qtd") or 0.0)
-            if _eh_agua(ing["nome"]):
-                agua = qtd * fator / 1000.0
-
-        linhas.append({"Prato": nome, "Receita": rec["nome"], "Porção (g)": porcao,
-                       "Fator": round(fator, 2), "Água (L)": round(agua, 2),
-                       "kg a produzir": round(kg_total, 2), "Avisos": ""})
-
-    return pd.DataFrame(linhas)
 
 # ═══════════════════════════════════════════════════════════════════
 #  CONTAGEM: engine em thread + fila de frames (para o Streamlit)
 # ═══════════════════════════════════════════════════════════════════
 
 _MODULO_CONTADOR = None
+
+# device pedido na UI -> device resolvido esperado (p/ avisar quando cai p/ outro)
+_DISPOSITIVO_ESPERADO = {
+    "cuda": "cuda", "mps": "mps",
+    "intel:gpu": "openvino:GPU", "intel:cpu": "openvino:CPU", "cpu": "cpu",
+}
 
 
 def _get_contador():
@@ -241,9 +101,10 @@ def _get_contador():
 class CounterEngine:
     def __init__(self, video_path: str, modelo: str = "yolo26n.pt",
                  device: str | None = None, tolerancia: float = 0.005,
-                 sample_rate: int = 1, img_size: int = 640):
+                 sample_rate: int = 3, img_size: int = 640):
         self.video_path = video_path
         self.modelo = modelo
+        self.device_pedido = device  # bruto, p/ avisar quando cair p/ outro
         self.device, self.device_desc = _get_contador().detect_device(device)
         self.tolerancia = tolerancia
         self.sample_rate = sample_rate
@@ -341,7 +202,7 @@ def tela_contagem() -> None:
                                "yolov8s.pt", "yolov8n.pt"])
         tolerancia = st.slider(" Tolerância", 0.001, 0.35, 0.005, 0.001,
                                help="Menor = exige mais semelhança para contar como a mesma pessoa.")
-        sample_rate = st.slider(" Sample rate", 1, 10, 1)
+        sample_rate = st.slider(" Sample rate", 1, 10, 3)
         img_size = st.selectbox(" Resolução", [320, 480, 640, 768, 1024], index=2)
         device = st.selectbox(" Hardware",
                               ["auto", "cpu", "intel:gpu", "intel:cpu", "cuda", "mps"],
@@ -361,6 +222,21 @@ def tela_contagem() -> None:
         st.error(f"❌ Erro na contagem: {eng.error}")
         st.session_state.pop("engine", None)
         st.rerun()
+
+    # Mostra sempre o hardware que está rodando DE VERDADE — o detect_device
+    # pode fazer fallback (ex.: GPU indisponível → CPU) e antes isso era invisível.
+    if eng is not None:
+        st.caption(f"🖥️ Hardware em uso: {eng.device_desc}")
+        esperado = _DISPOSITIVO_ESPERADO.get(eng.device_pedido or "")
+        if esperado and eng.device != esperado:
+            st.warning(
+                f"⚠️ **{eng.device_pedido}** não está disponível nesta máquina — "
+                f"rodando em: **{eng.device_desc}**. "
+                "Verifique o driver: no Linux/Intel o OpenVINO só lista a GPU com o "
+                "compute runtime da Intel instalado (Arch: `sudo pacman -S "
+                "intel-compute-runtime`; depois confira com "
+                "`python -c \"import openvino as ov; print(ov.Core().available_devices)\"`)."
+            )
 
     c1, c2, c3 = st.columns([1, 1, 2])
     iniciar = c1.button("▶️ Iniciar contagem", type="primary",
@@ -425,7 +301,7 @@ def tela_resultado() -> None:
     if eng is not None and eng.done and eng.final_count is not None:
         st.session_state["contagem_final"] = eng.final_count
 
-    # Geração automática dos dados (se os PDFs existirem e os JSONs não)
+    # Geração dos dados (os botões SEMPRE regeneram, sobrescrevendo os JSONs)
     with st.expander(" Geração dos dados (PDFs)", expanded=not RECEITAS_JSON.exists()):
         faltando = []
         if not RECEITAS_JSON.exists():
@@ -436,12 +312,20 @@ def tela_resultado() -> None:
             st.caption(f"Faltando gerar: {', '.join(faltando)}")
         c_rec, c_car = st.columns(2)
         if c_rec.button("Extrair receitas do PDF"):
-            gerar_receitas()
-            st.rerun()
-        mes_sel = c_car.selectbox("Mês do cardápio", MESES_NOMES, index=5)
+            try:
+                n = gerar_receitas()
+                carregar_receitas.clear()
+                st.success(f"receitas.json gerado ({n} receitas).")
+            except Exception as e:
+                st.error(f"Falha ao extrair receitas: {e}")
+        mes_sel = c_car.selectbox("Mês do cardápio", calculo.MESES_NOMES,
+                                  index=date.today().month - 1)
         if c_car.button("Extrair cardápio do PDF"):
-            gerar_cardapio(mes_sel)
-            st.rerun()
+            try:
+                n = gerar_cardapio(mes_sel)
+                st.success(f"cardapio.json gerado ({n} dias).")
+            except Exception as e:
+                st.error(f"Falha ao extrair cardápio: {e}")
 
     if not RECEITAS_JSON.exists():
         st.warning("Gere as receitas (`Extrair receitas do PDF`) antes de calcular.")
@@ -452,13 +336,13 @@ def tela_resultado() -> None:
     default_alunos = st.session_state.get("contagem_final", 0)
     c_data, c_seg, c_alu = st.columns([2, 2, 1])
     data_dia = c_data.date_input(" Data", value=date.today())
-    segmento = c_seg.selectbox(" Segmento", SEGMENTOS)
+    segmento = c_seg.selectbox(" Segmento", calculo.SEGMENTOS)
     alunos = c_alu.number_input(" Alunos", min_value=0,
                                 value=int(default_alunos), step=1)
     if default_alunos:
         st.caption(f"Valor da última contagem: **{default_alunos}** (editável acima).")
 
-    pratos_auto = pratos_do_dia(data_dia)
+    pratos_auto = calculo.pratos_do_dia(CARDAPIO_JSON, data_dia)
     opcoes = list(dict.fromkeys(pratos_auto + sorted(r["nome"] for r in banco.values())))
     pratos = st.multiselect(
         "Pratos do dia (automático pelo cardápio, editável)",
@@ -468,7 +352,7 @@ def tela_resultado() -> None:
         st.warning("Selecione ao menos um prato.")
         return
 
-    df = calcular_dia(alunos, pratos, segmento, banco)
+    df = calculo.calcular_dia(alunos, pratos, segmento, banco)
     agua_total = df["Água (L)"].sum()
     kg_total = df["kg a produzir"].sum()
 
@@ -489,7 +373,7 @@ def tela_resultado() -> None:
     col_x, col_y = st.columns(2)
     fname = f"producao_{data_dia.strftime('%Y-%m-%d')}"
     col_x.download_button("📥 Baixar CSV", df.to_csv(index=False, sep=";", encoding="utf-8-sig"),
-                          file_name=f"{fname}.csv", mime="text/csv", width="stretch")
+                           file_name=f"{fname}.csv", mime="text/csv", width="stretch")
     buf = io.BytesIO()
     df.to_excel(buf, index=False, sheet_name="producao")
     col_y.download_button("📥 Baixar Excel", buf.getvalue(),
@@ -516,11 +400,3 @@ if pagina == "Contagem":
     tela_contagem()
 else:
     tela_resultado()
-
-
-with st.sidebar:
-    
-    st.title("Visão computacional")
-    st.markdown("---")
-    
-

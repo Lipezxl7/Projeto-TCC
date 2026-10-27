@@ -1,8 +1,8 @@
 opencv-python
 numpy
-ultralytics
+ultralytics>=8.4      # yolo26 exige >=8.3; device nativo 'intel:gpu'/'intel:cpu' exige >=8.4
 openvino
 pandas
 pdfplumber
 openpyxl
-streamlit
+streamlit>=1.49       # width="stretch" (API AdvancedLayouts)

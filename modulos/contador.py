@@ -47,7 +47,12 @@ def detect_device(preferred: str | None = None) -> tuple[str, str]:
             case "cpu":
                 return "cpu", "CPU"
             case _:
-                return auto_device_selection(intel_available_devices)
+                # Nao cai no silencio: avisa que o pedido nao deu e o que vai usar.
+                device, desc = auto_device_selection(intel_available_devices)
+                print(f"\n  ⚠️  Dispositivo solicitado '{preferred}' indisponível "
+                      f"(OpenVINO devices: {intel_available_devices}). "
+                      f"Usando: {desc}\n")
+                return device, desc
 
     return auto_device_selection(intel_available_devices)
 
@@ -72,12 +77,14 @@ def _garantir_openvino_runtime() -> None:
 def load_model(device: str, model_name: str = "yolo26n.pt"):
     """
     Carrega o modelo YOLO correto para o device.
-    Para Intel/OpenVINO: exporta yolo26n para o formato OpenVINO na
-    primeira execucao e compila diretamente via openvino.Core() apontando
-    para o device correto (CPU ou GPU Intel).
+    Para Intel/OpenVINO: exporta o modelo para o formato OpenVINO na
+    primeira execucao e retorna o device NATIVO do ultralytics
+    ("intel:gpu" / "intel:cpu") — o backend OpenVINO do ultralytics (>=8.4)
+    mapeia para o device real, avisando (e caindo para AUTO/CPU) se
+    indisponivel.
 
     Retorna (model, device_para_track):
-      - OpenVINO: device_para_track = None  (nao passa ao track, evita erro CUDA)
+      - OpenVINO: device_para_track = "intel:gpu" | "intel:cpu"
       - Demais:   device_para_track = device string normal
     """
 
@@ -108,34 +115,22 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
                 f"Use um modelo ja exportado (ex: yolo26n.pt)."
             )
 
-        # Compila o modelo diretamente via OpenVINO Core apontando para o
-        # device correto (CPU ou GPU Intel). Isso e feito ANTES do ultralytics
-        # tentar validar o device string via select_device(), que interpretaria
-        # "GPU" como um device CUDA invalido e lancaria 'Invalid CUDA device'.
-        try:
-            core     = ov.Core()
-            xml_file = next(Path(ov_path).glob("*.xml"))
-            compiled = core.compile_model(str(xml_file), ov_target)
+        # Dispositivo NATIVO do ultralytics (>=8.4): "intel:gpu" / "intel:cpu".
+        # O select_device() do ultralytics repassa strings "intel:*" sem tentar
+        # resolver via PyTorch/CUDA, e o backend OpenVINO mapeia para o device
+        # real — avisando (e caindo para AUTO/CPU) se nao estiver disponivel.
+        # NAO passe "GPU"/"CPU" crus: isso sim quebra o select_device()
+        # ('Invalid CUDA device' — o erro que levou 1 hora pra achar).
+        dispositivo = f"intel:{ov_target.lower()}"
 
-            # Verificacao: confirma qual device o OpenVINO realmente usou
-            actual_device = compiled.get_property("EXECUTION_DEVICES")
-            full_name     = core.get_property(ov_target, "FULL_DEVICE_NAME")
-            print(f"  OpenVINO device solicitado : {ov_target}")
-            print(f"  OpenVINO device em uso     : {actual_device}")
-            print(f"  Nome completo do hardware  : {full_name}")
-
-        except Exception as e:
-            print(f"  Aviso: nao foi possivel compilar para {ov_target}: {e}")
-            print("  Usando OpenVINO com device padrao (CPU).")
-
-        # None como device: model.track() nao recebera "GPU"/"CPU" e nao
-        # tentara resolver via PyTorch/CUDA, evitando o erro que eu tava tentando resolver a 1 hora.
         model = YOLO(ov_path)
 
-        # Pre-validacao: 1 inferencia dummy p/ falhar cedo (msg clara) se houver
-        # incompatibilidade entre ultralytics e openvino.
+        # Pre-validacao: 1 inferencia dummy NO device pedido, p/ falhar cedo
+        # (msg clara) se houver incompatibilidade ultralytics/openvino ou
+        # problema no plugin do device.
         try:
-            model.predict(np.zeros((64, 64, 3), dtype=np.uint8), verbose=False)
+            model.predict(np.zeros((64, 64, 3), dtype=np.uint8),
+                          device=dispositivo, verbose=False)
         except Exception as e:
             raise RuntimeError(
                 f"Modelo OpenVINO carregado mas a inferencia falhou: {e}. "
@@ -143,7 +138,7 @@ def load_model(device: str, model_name: str = "yolo26n.pt"):
                 f"e openvino {ov.__version__}."
             ) from e
 
-        return model, None
+        return model, dispositivo
 
     return YOLO(model_name), device
 
