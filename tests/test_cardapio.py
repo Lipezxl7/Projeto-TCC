@@ -17,7 +17,7 @@ def test_extracao_do_pdf_real(tmp_path):
 
     assert len(dados) > 0
     for dia in dados:
-        assert re.fullmatch(r"\d{1,2}/jun", dia["data"]), dia["data"]
+        assert re.fullmatch(r"\d{1,2}/jun", dia["data"], re.IGNORECASE), dia["data"]
         assert len(dia["pratos"]) > 0
         for prato in dia["pratos"]:
             assert prato == prato.upper()

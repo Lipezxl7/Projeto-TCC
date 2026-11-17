@@ -72,10 +72,11 @@ def executar_extracao(caminho_pdf="cardapio.pdf", arquivo_saida=None, mes=None,
 
             for tabela in tabelas:
                 for r_idx, linha in enumerate(tabela):
-                    # Identifica a linha que contém as datas
-                    if any(isinstance(c, str) and f"/{mes}" in c for c in linha):
+                    # Identifica a linha que contém as datas (case-insensitive)
+                    mes_lower = mes.lower()
+                    if any(isinstance(c, str) and f"/{mes_lower}" in c.lower() for c in linha):
                         for i, celula in enumerate(linha):
-                            if celula and f"/{mes}" in celula:
+                            if celula and f"/{mes_lower}" in celula.lower():
                                 # Pula para a linha da refeição principal (índice 3)
                                 if len(tabela) > 3:
                                     refeicao = tabela[3][i]
