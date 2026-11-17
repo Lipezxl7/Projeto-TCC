@@ -44,8 +44,196 @@ CARDAPIO_JSON = _caminho("cardapio.json")
 RECEITAS_JSON = _caminho("receitas.json")
 
 
+
+def _exportar_excel_formatado(df, buf, nome_arquivo: str) -> None:
+    """
+    Exporta DataFrame para Excel (.xlsx) com formatação profissional usando openpyxl.
+
+    Formatação:
+    - Cabeçalho: fundo azul escuro (#1F4E78), texto branco, negrito, centralizado, altura 25
+    - Linhas zebradas: branco (#FFFFFF) / azul claro (#D9E1F2)
+    - Bordas finas cinza (#BFBFBF) em todas as células
+    - Alinhamento: texto à esquerda (Prato, Receita, Avisos), numérico à direita (Porção, Fator, Água, kg)
+    - Formato numérico: 2 casas decimais
+    - Largura automática por coluna (maior texto + 4 chars de folga)
+    """
+    import pandas as pd
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "producao"
+
+    # Estilos
+    header_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    light_blue_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
+    )
+
+    left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    right_align = Alignment(horizontal="right", vertical="center")
+    center_align = Alignment(horizontal="center", vertical="center")
+
+    num_format = "0.00"
+
+    # Colunas de texto (alinhamento à esquerda)
+    text_cols = {"Prato", "Receita", "Avisos"}
+    # Colunas numéricas (alinhamento à direita, formato decimal)
+    num_cols = {"Porção (g)", "Fator", "Água (L)", "kg a produzir"}
+
+    # Cabeçalho
+    for col_idx, col_name in enumerate(df.columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    # Dados
+    for row_idx, (_, row) in enumerate(df.iterrows(), 2):
+        # Preenchimento zebrado
+        row_fill = white_fill if row_idx % 2 == 0 else light_blue_fill
+
+        for col_idx, col_name in enumerate(df.columns, 1):
+            value = row[col_name]
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.fill = row_fill
+            cell.border = thin_border
+
+            # Alinhamento e formato por tipo de coluna
+            if col_name in text_cols:
+                cell.alignment = left_align
+            elif col_name in num_cols:
+                cell.alignment = right_align
+                cell.number_format = num_format
+            else:
+                cell.alignment = center_align
+
+    # Largura automática das colunas (maior texto + 4 chars de folga)
+    for col_idx, col_name in enumerate(df.columns, 1):
+        max_len = len(str(col_name))
+        for _, row in df.iterrows():
+            val = row[col_name]
+            if pd.notna(val):
+                val_str = str(val)
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+        ws.column_dimensions[get_column_letter(col_idx)].width = max_len + 4
+
+    # Altura do cabeçalho
+    ws.row_dimensions[1].height = 25
+
+    wb.save(buf)
+
+
+
 # ════════════════════════════════════════════════════════════════════
 #  CACHE NO LOCALSTORAGE (browser)
+
+def _exportar_excel_formatado(df, buf, nome_arquivo: str) -> None:
+    """
+    Exporta DataFrame para Excel (.xlsx) com formatação profissional usando openpyxl.
+
+    Formatação:
+    - Cabeçalho: fundo azul escuro (#1F4E78), texto branco, negrito, centralizado, altura 25
+    - Linhas zebradas: branco (#FFFFFF) / azul claro (#D9E1F2)
+    - Bordas finas cinza (#BFBFBF) em todas as células
+    - Alinhamento: texto à esquerda (Prato, Receita, Avisos), numérico à direita (Porção, Fator, Água, kg)
+    - Formato numérico: 2 casas decimais
+    - Largura automática por coluna (maior texto + 4 chars de folga)
+    """
+    import pandas as pd
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "producao"
+
+    # Estilos
+    header_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    light_blue_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
+    )
+
+    left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    right_align = Alignment(horizontal="right", vertical="center")
+    center_align = Alignment(horizontal="center", vertical="center")
+
+    num_format = "0.00"
+
+    # Colunas de texto (alinhamento à esquerda)
+    text_cols = {"Prato", "Receita", "Avisos"}
+    # Colunas numéricas (alinhamento à direita, formato decimal)
+    num_cols = {"Porção (g)", "Fator", "Água (L)", "kg a produzir"}
+
+    # Cabeçalho
+    for col_idx, col_name in enumerate(df.columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    # Dados
+    for row_idx, (_, row) in enumerate(df.iterrows(), 2):
+        # Preenchimento zebrado
+        row_fill = white_fill if row_idx % 2 == 0 else light_blue_fill
+
+        for col_idx, col_name in enumerate(df.columns, 1):
+            value = row[col_name]
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.fill = row_fill
+            cell.border = thin_border
+
+            # Alinhamento e formato por tipo de coluna
+            if col_name in text_cols:
+                cell.alignment = left_align
+            elif col_name in num_cols:
+                cell.alignment = right_align
+                cell.number_format = num_format
+            else:
+                cell.alignment = center_align
+
+    # Largura automática das colunas (maior texto + 4 chars de folga)
+    for col_idx, col_name in enumerate(df.columns, 1):
+        max_len = len(str(col_name))
+        for _, row in df.iterrows():
+            val = row[col_name]
+            if pd.notna(val):
+                val_str = str(val)
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+        ws.column_dimensions[get_column_letter(col_idx)].width = max_len + 4
+
+    # Altura do cabeçalho
+    ws.row_dimensions[1].height = 25
+
+    wb.save(buf)
+
+
+
 # ════════════════════════════════════════════════════════════════════
 
 # Chaves do localStorage
@@ -118,6 +306,100 @@ def _cache_clear_all() -> None:
     </script>
     """
     st_html(js, height=0, width=0)
+
+
+def _exportar_excel_formatado(df, buf, nome_arquivo: str) -> None:
+    """
+    Exporta DataFrame para Excel (.xlsx) com formatação profissional usando openpyxl.
+
+    Formatação:
+    - Cabeçalho: fundo azul escuro (#1F4E78), texto branco, negrito, centralizado, altura 25
+    - Linhas zebradas: branco (#FFFFFF) / azul claro (#D9E1F2)
+    - Bordas finas cinza (#BFBFBF) em todas as células
+    - Alinhamento: texto à esquerda (Prato, Receita, Avisos), numérico à direita (Porção, Fator, Água, kg)
+    - Formato numérico: 2 casas decimais
+    - Largura automática por coluna (maior texto + 4 chars de folga)
+    """
+    import pandas as pd
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, numbers
+    from openpyxl.utils import get_column_letter
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "producao"
+
+    # Estilos
+    header_font = Font(name="Calibri", bold=True, color="FFFFFF", size=11)
+    header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    white_fill = PatternFill(start_color="FFFFFF", end_color="FFFFFF", fill_type="solid")
+    light_blue_fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+
+    thin_border = Border(
+        left=Side(style="thin", color="BFBFBF"),
+        right=Side(style="thin", color="BFBFBF"),
+        top=Side(style="thin", color="BFBFBF"),
+        bottom=Side(style="thin", color="BFBFBF"),
+    )
+
+    left_align = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    right_align = Alignment(horizontal="right", vertical="center")
+    center_align = Alignment(horizontal="center", vertical="center")
+
+    num_format = "0.00"
+
+    # Colunas de texto (alinhamento à esquerda)
+    text_cols = {"Prato", "Receita", "Avisos"}
+    # Colunas numéricas (alinhamento à direita, formato decimal)
+    num_cols = {"Porção (g)", "Fator", "Água (L)", "kg a produzir"}
+
+    # Cabeçalho
+    for col_idx, col_name in enumerate(df.columns, 1):
+        cell = ws.cell(row=1, column=col_idx, value=col_name)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    # Dados
+    for row_idx, (_, row) in enumerate(df.iterrows(), 2):
+        # Preenchimento zebrado
+        row_fill = white_fill if row_idx % 2 == 0 else light_blue_fill
+
+        for col_idx, col_name in enumerate(df.columns, 1):
+            value = row[col_name]
+            cell = ws.cell(row=row_idx, column=col_idx, value=value)
+            cell.fill = row_fill
+            cell.border = thin_border
+
+            # Alinhamento e formato por tipo de coluna
+            if col_name in text_cols:
+                cell.alignment = left_align
+            elif col_name in num_cols:
+                cell.alignment = right_align
+                cell.number_format = num_format
+            else:
+                cell.alignment = center_align
+
+    # Largura automática das colunas (maior texto + 4 chars de folga)
+    for col_idx, col_name in enumerate(df.columns, 1):
+        max_len = len(str(col_name))
+        for _, row in df.iterrows():
+            val = row[col_name]
+            if pd.notna(val):
+                val_str = str(val)
+                if len(val_str) > max_len:
+                    max_len = len(val_str)
+        ws.column_dimensions[get_column_letter(col_idx)].width = max_len + 4
+
+    # Altura do cabeçalho
+    ws.row_dimensions[1].height = 25
+
+    wb.save(buf)
+
+
 
 # ════════════════════════════════════════════════════════════════════
 #  GERAÇÃO DE DADOS (modulos)
@@ -551,10 +833,13 @@ def tela_resultado() -> None:
     st.divider()
     col_x, col_y = st.columns(2)
     fname = f"producao_{data_dia.strftime('%Y-%m-%d')}"
+
     col_x.download_button("Baixar CSV", df.to_csv(index=False, sep=";", encoding="utf-8-sig"),
                            file_name=f"{fname}.csv", mime="text/csv", width="stretch")
+
+    # Excel formatado (openpyxl)
     buf = io.BytesIO()
-    df.to_excel(buf, index=False, sheet_name="producao")
+    _exportar_excel_formatado(df, buf, fname)
     col_y.download_button("Baixar Excel", buf.getvalue(),
                           file_name=f"{fname}.xlsx", width="stretch",
                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
